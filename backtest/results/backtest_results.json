@@ -1,0 +1,17 @@
+{
+  "full_period": {
+    "total_return_pct": 1860.02,
+    "sharpe_ratio": 0.8781,
+    "max_drawdown_pct": 33.72,
+    "total_trades": 15,
+    "win_rate_pct": 78.57
+  },
+  "benchmark_buy_and_hold": {
+    "total_return_pct": 2649.9,
+    "sharpe_ratio": 0.7601,
+    "max_drawdown_pct": 55.19
+  },
+  "out_of_sample_post_2020": {
+    "sharpe_ratio": 1.1387
+  }
+}
