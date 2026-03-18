@@ -43,6 +43,18 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             total_value REAL NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS shadow_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            close_price REAL NOT NULL,
+            predicted_class INTEGER NOT NULL,
+            predicted_proba TEXT NOT NULL,
+            ml_signal TEXT NOT NULL,
+            sma_signal TEXT NOT NULL
+        )
+    """)
     conn.commit()
     return conn
 
@@ -126,3 +138,26 @@ def update_order_fill(
         (fill_price, fill_timestamp.isoformat(), status, alpaca_order_id),
     )
     conn.commit()
+
+
+def log_shadow_signal(
+    conn: sqlite3.Connection,
+    timestamp: datetime,
+    ticker: str,
+    close_price: float,
+    predicted_class: int,
+    predicted_proba: str,
+    ml_signal: str,
+    sma_signal: str,
+) -> int:
+    cursor = conn.execute(
+        "INSERT INTO shadow_signals (timestamp, ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (timestamp.isoformat(), ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_shadow_signals(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT * FROM shadow_signals ORDER BY id").fetchall()
+    return [dict(row) for row in rows]
