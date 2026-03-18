@@ -49,7 +49,8 @@ SchroederTrader/
 │           ├── __init__.py
 │           └── trade_log.py     # SQLite: log signals, orders, portfolio state
 ├── backtest/
-│   └── run_backtest.py          # vectorbt backtest harness using the same strategy module
+│   ├── run_backtest.py          # vectorbt backtest harness using the same strategy module
+│   └── data/                    # Cached historical data (CSV) to avoid yfinance flakiness
 ├── tests/
 │   └── ...                      # Unit tests per module
 ├── .env                         # API keys, email credentials (gitignored)
@@ -66,45 +67,58 @@ The pipeline runs as a single sequential flow, triggered by cron daily at 4:30 P
 [Cron triggers main.py]
         │
         ▼
-[1. Market Calendar Check]
+[1. Idempotency Check]
+   Query signals table for an entry with today's date
+   If already ran today: log "already ran" and exit
+        │
+        ▼
+[2. Fill Check]
+   Query Alpaca for any pending orders from previous runs
+   If a prior order has filled: update orders table with fill_price and FILLED status
+   If a prior order was rejected: update status and send error alert
+        │
+        ▼
+[3. Market Calendar Check]
    Query Alpaca market calendar
    If market closed today (holiday): log and exit
         │
         ▼
-[2. Data Module]
+[4. Data Module]
    Fetch 200+ daily bars for SPY via Alpaca API
    Returns: pandas DataFrame (date, open, high, low, close, volume)
         │
         ▼
-[3. Strategy Module]
+[5. Strategy Module]
    Compute SMA_50 and SMA_200
    Detect crossover event vs previous day
    Returns: Signal enum (BUY, SELL, HOLD)
         │
         ▼
-[4. Risk Module]
+[6. Risk Module]
    Check current position via Alpaca
-   If BUY: calculate shares = (portfolio_value * (1 - cash_buffer)) / close_price
-   If SELL: confirm we hold a position to close
+   If BUY: calculate shares (floored to whole shares) = floor((portfolio_value * (1 - cash_buffer)) / close_price)
+   If SELL and position held: prepare to close entire position
+   If SELL and no position held: treat as HOLD, log a note
    If HOLD: no action
    Returns: OrderRequest (action, quantity) or None
         │
         ▼
-[5. Execution Module]
+[7. Execution Module]
    Submit market order to Alpaca paper account
-   Wait for fill confirmation
-   Returns: OrderResult (fill_price, quantity, timestamp, status)
+   Order submitted after-hours will fill at next day's open
+   Log order with SUBMITTED status (fill confirmation handled by step 2 on next run)
+   Returns: OrderResult (order_id, quantity, timestamp, status=SUBMITTED)
         │
         ▼
-[6. Storage Module]
+[8. Storage Module]
    Log signal, order, and portfolio snapshot to SQLite
         │
         ▼
-[7. Alerts Module]
-   Trade placed → email summary
+[9. Alerts Module]
+   Trade submitted → email summary (note: will fill at next open)
    Error at any step → email error details
-   HOLD / no action → no email
-   Daily run complete → email portfolio summary
+   HOLD (no trade action) → no trade email
+   Daily summary → always sent with portfolio value, regardless of signal
 ```
 
 ## Strategy Logic
@@ -116,8 +130,8 @@ The pipeline runs as a single sequential flow, triggered by cron daily at 4:30 P
 - **HOLD**: no crossover occurred
 
 **Position logic:**
-- On BUY: go long SPY with full allocation minus 2% cash buffer
-- On SELL: close entire position (flat, no shorting)
+- On BUY: go long SPY with full allocation minus 2% cash buffer, floored to whole shares
+- On SELL: close entire position (flat, no shorting). If no position is held, treat as HOLD and log a note.
 - Binary state: either fully in SPY or fully in cash
 
 ## Storage Schema
@@ -138,11 +152,13 @@ The pipeline runs as a single sequential flow, triggered by cron daily at 4:30 P
 |---|---|---|
 | id | INTEGER PK | Auto-increment |
 | signal_id | INTEGER FK | Links to the signal that triggered it |
+| alpaca_order_id | TEXT | Alpaca's order ID for fill tracking |
 | timestamp | DATETIME | Order submission time |
 | ticker | TEXT | "SPY" |
 | action | TEXT | BUY / SELL |
-| quantity | INTEGER | Shares ordered |
+| quantity | INTEGER | Shares ordered (whole shares only) |
 | fill_price | REAL | Actual fill price (null until filled) |
+| fill_timestamp | DATETIME | When the fill occurred (null until filled) |
 | status | TEXT | SUBMITTED / FILLED / REJECTED / ERROR |
 
 ### `portfolio` table
@@ -161,11 +177,12 @@ The pipeline runs as a single sequential flow, triggered by cron daily at 4:30 P
 
 | Event | Email? | Subject Format |
 |---|---|---|
-| Trade placed | Yes | `[SchroederTrader] BUY 45 SPY @ $523.10` |
-| Trade filled | Yes | `[SchroederTrader] FILLED: BUY 45 SPY @ $523.15` |
+| Trade submitted | Yes | `[SchroederTrader] SUBMITTED: BUY 45 SPY (fills at next open)` |
+| Prior trade filled (detected on next run) | Yes | `[SchroederTrader] FILLED: BUY 45 SPY @ $523.15` |
 | Error | Yes | `[SchroederTrader] ERROR: Data fetch failed` |
-| HOLD (no action) | No | — |
-| Daily run complete | Yes | `[SchroederTrader] Daily run complete - Portfolio: $10,245` |
+| Daily summary | Yes (always) | `[SchroederTrader] Daily run complete - Portfolio: $10,245` |
+
+**Clarification on HOLD days:** No *trade* email is sent, but the daily summary email always sends regardless of signal. Most days will be HOLD days — you'll get one short email confirming the system ran and showing portfolio value.
 
 Email content includes: action, ticker, quantity, price, portfolio value, cash balance, SMA values. Plain text format.
 
@@ -186,25 +203,47 @@ ALERT_EMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
 
 **`config.py` — non-secret parameters:**
 ```python
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 TICKER = "SPY"
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
 SLIPPAGE_ESTIMATE = 0.0005      # 0.05% for backtest cost modeling
 CASH_BUFFER_PCT = 0.02          # Keep 2% cash reserve
-DB_PATH = "data/trades.db"
+DB_PATH = PROJECT_ROOT / "data" / "trades.db"
+LOG_DIR = PROJECT_ROOT / "logs"
 ```
 
 Switching from paper to live trading is a single env var change (`ALPACA_BASE_URL`).
+
+## Logging
+
+Python `logging` module throughout the pipeline:
+- **Console**: INFO level — signal results, order submissions, portfolio snapshots
+- **File**: DEBUG level — written to `logs/schroeder_trader.log` with rotation
+- Structured format: `%(asctime)s [%(levelname)s] %(name)s: %(message)s`
+
+This is separate from the SQLite trade log — `logging` is for operational debugging, SQLite is for trade audit trail.
 
 ## Backtesting
 
 vectorbt backtest harness that imports the same `sma_crossover.py` module as the live pipeline.
 
-- **Data**: yfinance historical SPY data from 1993 to present (~30 years)
+- **Data**: yfinance historical SPY data from 1993 to present (~30 years). Downloaded once and cached to `backtest/data/spy_daily.csv` so repeated backtest runs don't depend on yfinance availability. A refresh script re-downloads when needed.
 - **Metrics**: total return, Sharpe ratio, max drawdown, win rate, trade count — all net of 0.05% slippage per trade
-- **Validation**: walk-forward with rolling 1-year out-of-sample windows
+- **Validation**: simple train/test split (pre-2020 / post-2020) since the 50/200 SMA has no tunable parameters — walk-forward adds no value for a fixed-parameter strategy
 - **Benchmark**: buy-and-hold SPY over the same period
 - **Output**: summary report (console + JSON), equity curve plot (PNG)
+
+## Testing
+
+- **Unit tests** for each module, using `pytest`
+- **Mocking**: Alpaca API calls mocked via `unittest.mock` or `pytest-mock`. SMTP mocked. SQLite uses an in-memory database.
+- **Per-module coverage**: happy path + primary error case for each module
+- **Integration test**: one test that runs the full pipeline with a mock broker and in-memory SQLite, confirming the data flow end-to-end
+- No coverage target for Phase 1 — focus on testing the critical path
 
 ## Dependencies
 
@@ -217,23 +256,26 @@ python-dotenv        # Load .env
 pytest               # Testing
 ```
 
-`smtplib`, `sqlite3`, `email` are Python stdlib — no extra packages needed.
+`smtplib`, `sqlite3`, `email`, `logging` are Python stdlib — no extra packages needed.
 
 ## Scheduling
 
 ```
-30 16 * * 1-5  /path/to/.venv/bin/python /path/to/main.py >> /path/to/logs/cron.log 2>&1
+CRON_TZ=America/New_York
+30 16 * * 1-5  /Users/ads7fg/git/SchroederTrader/.venv/bin/python /Users/ads7fg/git/SchroederTrader/src/schroeder_trader/main.py >> /Users/ads7fg/git/SchroederTrader/logs/cron.log 2>&1
 ```
 
 - 4:30 PM ET, weekdays only (after 4:00 PM market close)
+- `CRON_TZ` ensures correct timing regardless of system timezone and across DST transitions
 - Market calendar check at pipeline start skips holidays
-- Orders execute as market orders at next day's open
+- Orders submitted after-hours fill as market orders at next day's open
+- Fill confirmation is picked up by the next day's run (step 2 in data flow)
 
 ## Error Handling
 
 Each module raises typed exceptions. The orchestrator (`main.py`):
 1. Catches all exceptions
-2. Logs the error to SQLite (storage module)
+2. Logs the error via Python `logging` and to SQLite (storage module)
 3. Sends an error alert email (alerts module)
 4. Exits with non-zero status code
 
@@ -242,7 +284,7 @@ No silent failures. A failed alert email does not block trade execution or loggi
 ## Phase 1 Gate Criteria
 
 Before advancing to Phase 2:
-1. Backtest shows positive out-of-sample Sharpe ratio across walk-forward windows
+1. Backtest shows positive out-of-sample Sharpe ratio (post-2020 test period)
 2. Paper trading runs successfully for 6+ weeks with no pipeline errors
 3. All metrics (Sharpe, drawdown, trade log) are being captured correctly
 4. Performance baseline is documented for Phase 2 comparison
