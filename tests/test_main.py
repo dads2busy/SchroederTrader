@@ -80,6 +80,7 @@ def test_pipeline_skips_if_market_closed(
     run_pipeline(db_path=db_path)
 
 
+@patch("schroeder_trader.main.load_model")
 @patch("schroeder_trader.main.send_daily_summary")
 @patch("schroeder_trader.main.get_account")
 @patch("schroeder_trader.main.get_position")
@@ -95,6 +96,7 @@ def test_pipeline_shadow_mode_skips_when_no_model(
     mock_position,
     mock_account,
     mock_summary,
+    mock_load_model,
     tmp_path,
 ):
     """Shadow mode should silently skip when no model file exists."""
@@ -104,6 +106,7 @@ def test_pipeline_shadow_mode_skips_when_no_model(
     mock_fetch.return_value = _mock_bars_df()
     mock_position.return_value = 0
     mock_account.return_value = {"portfolio_value": 10000.0, "cash": 10000.0}
+    mock_load_model.return_value = None
 
     db_path = tmp_path / "test.db"
     run_pipeline(db_path=db_path)
