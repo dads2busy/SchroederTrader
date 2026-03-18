@@ -10,6 +10,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DB_PATH = PROJECT_ROOT / "data" / "trades.db"
 LOG_DIR = PROJECT_ROOT / "logs"
 
+# Model paths
+COMPOSITE_MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_spy_20d.json"
+FEATURES_CSV_PATH = PROJECT_ROOT / "backtest" / "data" / "features_daily.csv"
+
 # Trading parameters
 TICKER = "SPY"
 SMA_SHORT_WINDOW = 50
