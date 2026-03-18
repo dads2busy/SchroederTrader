@@ -1,0 +1,64 @@
+import numpy as np
+import pandas as pd
+
+from schroeder_trader.strategy.regime_detector import Regime
+from schroeder_trader.strategy.sma_crossover import Signal
+
+
+def composite_signal(
+    regime: Regime,
+    sma_signal: Signal,
+    xgb_signal: Signal,
+) -> Signal:
+    """Route to the appropriate strategy based on regime (Phase 3 simple version)."""
+    if regime in (Regime.BULL, Regime.BEAR):
+        return sma_signal
+    else:
+        return xgb_signal
+
+
+def composite_signal_hybrid(
+    regime: Regime,
+    sma_signal: Signal,
+    xgb_signal_low: Signal,
+    xgb_signal_high: Signal,
+    bear_days: int,
+    late_bear_threshold: int = 20,
+) -> tuple[Signal, str]:
+    """Route signal based on regime and bear duration.
+
+    Returns:
+        Tuple of (Signal, source) where source is "SMA", "FLAT", or "XGB".
+    """
+    if regime == Regime.BULL:
+        return sma_signal, "SMA"
+    elif regime == Regime.BEAR:
+        if bear_days <= late_bear_threshold:
+            return Signal.SELL, "FLAT"
+        else:
+            return xgb_signal_high, "XGB"
+    else:
+        return xgb_signal_low, "XGB"
+
+
+def count_consecutive_bear_days(regimes: pd.Series) -> int:
+    """Count consecutive BEAR days ending at the last row.
+
+    Returns 0 if the last row is not BEAR, is NaN, or series is empty.
+    """
+    if len(regimes) == 0:
+        return 0
+
+    last = regimes.iloc[-1]
+    if not isinstance(last, Regime) or last != Regime.BEAR:
+        return 0
+
+    count = 0
+    for i in range(len(regimes) - 1, -1, -1):
+        val = regimes.iloc[i]
+        if isinstance(val, Regime) and val == Regime.BEAR:
+            count += 1
+        else:
+            break
+
+    return count
