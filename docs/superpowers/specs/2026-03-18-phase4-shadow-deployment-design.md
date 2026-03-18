@@ -6,6 +6,8 @@ Deploy the validated composite strategy (SMA in Bull, flat/XGBoost in Bear, XGBo
 
 **Goal:** Get the all-gates-passing composite strategy (Sharpe 0.94/1.26, 16.1% max DD) generating live predictions against real market data.
 
+**Note:** The Sharpe 0.94/1.26 results were obtained using the exact hybrid bear routing described in this spec (flat for first 20 bear days, XGBoost at 0.50 after), not the Phase 3 spec's simpler BEAR→SMA routing.
+
 ## What Changes
 
 The current `main.py` shadow Step 10 loads an XGBoost model and logs a single ML prediction. We replace this with the full composite signal routing: regime detection → route to SMA/flat/XGBoost → log the composite signal, regime, and signal source.
@@ -34,8 +36,8 @@ Step 10: Composite Shadow Signal (replaces current shadow step)
      a. Compute log_return_20d, volatility_20d, vol_median from price history
      b. Call detect_regime() for today's values
   7. Count consecutive bear days:
-     a. Look back through recent regime history (last 30 days)
-     b. Count consecutive BEAR days ending at today
+     a. Compute regimes for the full 400-day history using detect_regime()
+     b. Count consecutive BEAR days ending at today (scan backward from last row)
   8. Route signal based on regime:
      - BULL → reuse SMA signal from Step 5 (already computed)
      - BEAR ≤ 20 days → SELL (go flat)
@@ -75,19 +77,23 @@ Signal routing:
 
 ### Bear Day Counting
 
-Computed from price history each run. The function takes a DataFrame of recent close prices and computes how many consecutive days (ending today) have been classified as BEAR:
+Computed from the full 400-day price history each run. The function receives the **entire** features DataFrame (with regime labels already computed for all rows) and counts how many consecutive days ending at the last row are BEAR:
 
 ```python
-def count_consecutive_bear_days(df: pd.DataFrame, today_regime: Regime) -> int:
-    """Count consecutive bear days ending at today.
+def count_consecutive_bear_days(regimes: pd.Series) -> int:
+    """Count consecutive BEAR days ending at the last row.
 
-    Looks back through recent price history, computes regime for each day,
-    and counts how many consecutive days ending at today are BEAR.
-    Returns 0 if today is not BEAR.
+    Args:
+        regimes: Series of Regime enum values (from compute_regimes or equivalent),
+                 covering the full 400-day history. NaN values are treated as non-BEAR.
+
+    Returns:
+        Number of consecutive BEAR days ending at the last row.
+        Returns 0 if the last row is not BEAR.
     """
 ```
 
-This reuses `detect_regime()` with backward-looking vol_median to avoid look-ahead.
+**Important:** The regime labels must be computed from the full 400-day history (not a 30-day slice) because `detect_regime()` requires `vol_median` which is a 252-day rolling median. The full history ensures vol_median is valid for the recent days we care about. The function only needs to scan backward from the last row until it finds a non-BEAR day, so even with 400 rows of regimes it is O(N) where N is the bear streak length (typically small).
 
 ## XGBoost Signal Generation
 
@@ -129,7 +135,9 @@ Existing columns unchanged: id, timestamp, ticker, close_price, predicted_class,
 
 The `ml_signal` column stores the composite signal (the output of `composite_signal_hybrid`).
 
-Migration: `ALTER TABLE` to add columns with defaults. Existing rows get NULL for the new columns.
+**When XGBoost is not consulted (BULL → SMA or early BEAR → FLAT):** `predicted_class` is set to -1 and `predicted_proba` is set to `"{}"` (empty JSON). The XGBoost probabilities are only meaningful when the signal comes from XGB. The `predicted_class` column type changes to allow -1 as a sentinel (it was previously `INTEGER NOT NULL`).
+
+Migration: Add columns defensively in `init_db()`. Since SQLite `ALTER TABLE ADD COLUMN` fails if the column already exists, wrap each addition in a try/except or check `PRAGMA table_info(shadow_signals)` first. Use the same pattern as `CREATE TABLE IF NOT EXISTS` — idempotent, safe to run on every startup. Existing rows get NULL for the new columns.
 
 ### Updated Storage Functions
 
@@ -154,13 +162,22 @@ This script:
 
 This replaces the old 5-day model file. The model must be retrained before the first shadow run with the new composite pipeline.
 
-## Feature Requirements for Shadow Mode
+## Live Feature Computation
 
-The composite needs these external data points for today's features:
-- HYG close, LQD close → credit_spread (20-day change of log ratio)
-- UUP close → dollar_momentum (20-day log return)
+Step 10 must produce the same 6 features the model was trained on: `log_return_5d, log_return_20d, volatility_20d, credit_spread, dollar_momentum, regime_label`.
 
-Plus SPY OHLCV for base features and SMA crossover.
+**This is NOT the same as the Phase 2 `compute_features()` method** (which produces `sma_ratio, volume_ratio, rsi_14`). Step 10 uses `FeaturePipeline.compute_features_extended(spy_df, external_df)` which was added in Phase 2.1.
+
+The live computation path:
+1. Fetch 400 days of SPY OHLCV via `fetch_daily_bars(TICKER, days=400)`
+2. Load external features CSV via `pd.read_csv('backtest/data/features_daily.csv')`
+3. Call `pipeline.compute_features_extended(spy_df, external_df)` → produces all 14 extended features
+4. Compute regime_label for each day using `detect_regime()` with backward-looking vol_median
+5. Extract the last row's 6 feature values for XGBoost prediction
+
+**External features CSV path:** `PROJECT_ROOT / "backtest" / "data" / "features_daily.csv"` — resolved via `config.PROJECT_ROOT`, not relative to `download_features.py`. The `download_features.py` script writes to this location; `main.py` reads from it.
+
+**Date alignment for the last row:** The external CSV may not have today's date yet (depends on when tickers report). Use a left join on SPY dates with forward-fill (limit 1 day) on external features. If today's external data is missing, use yesterday's values — this is acceptable for 20-day rolling features where one day of lag has negligible impact.
 
 `download_features.py` fetches all external tickers and caches to CSV. The pipeline calls it at the start of Step 10 with the existing idempotency check (skip if file <24h old).
 
