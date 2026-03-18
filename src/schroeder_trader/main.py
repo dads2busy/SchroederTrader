@@ -1,10 +1,11 @@
+import json
 import logging
 import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-from schroeder_trader.config import DB_PATH, TICKER
+from schroeder_trader.config import DB_PATH, PROJECT_ROOT, TICKER
 from schroeder_trader.logging_config import setup_logging
 from schroeder_trader.data.market_data import fetch_daily_bars, is_market_open_today
 from schroeder_trader.strategy.sma_crossover import generate_signal
@@ -23,7 +24,10 @@ from schroeder_trader.storage.trade_log import (
     get_signal_by_date,
     get_pending_orders,
     update_order_fill,
+    log_shadow_signal,
 )
+from schroeder_trader.strategy.feature_engineer import FeaturePipeline
+from schroeder_trader.strategy.xgboost_classifier import load_model, predict_signal
 from schroeder_trader.alerts.email_alert import (
     send_trade_alert,
     send_fill_alert,
@@ -32,6 +36,8 @@ from schroeder_trader.alerts.email_alert import (
 )
 
 logger = logging.getLogger(__name__)
+
+MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_spy.json"
 
 
 def run_pipeline(db_path: Path = DB_PATH) -> None:
@@ -133,6 +139,34 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
         sma_50=sma_50,
         sma_200=sma_200,
     )
+
+    # Step 10: Shadow ML prediction
+    try:
+        model = load_model(MODEL_PATH)
+        if model is not None:
+            shadow_df = fetch_daily_bars(TICKER, days=400)
+            pipeline = FeaturePipeline()
+            features = pipeline.compute_features(shadow_df)
+            if len(features) > 0:
+                last_row = features.iloc[[-1]]
+                feature_cols = [
+                    "log_return_5d", "log_return_20d", "volatility_20d",
+                    "sma_ratio", "volume_ratio", "rsi_14",
+                ]
+                ml_signal, proba = predict_signal(model, last_row[feature_cols])
+                class_map = {"SELL": 0, "HOLD": 1, "BUY": 2}
+                pred_class = class_map.get(ml_signal.value, 1)
+                log_shadow_signal(
+                    conn, now, TICKER, close_price,
+                    predicted_class=pred_class,
+                    predicted_proba=json.dumps(proba),
+                    ml_signal=ml_signal.value,
+                    sma_signal=signal.value,
+                )
+                logger.info("Shadow ML signal: %s (UP=%.2f, FLAT=%.2f, DOWN=%.2f)",
+                           ml_signal.value, proba["UP"], proba["FLAT"], proba["DOWN"])
+    except Exception:
+        logger.exception("Shadow ML prediction failed (non-fatal)")
 
     conn.close()
     logger.info("Pipeline complete")
