@@ -13,7 +13,7 @@ A composite strategy that routes signals through a regime detector: SMA crossove
 | Full-period Sharpe | ≥ 0.88 | Match SMA crossover's proven level |
 | Post-2020 Sharpe | ≥ 0.80 | Confirm regime-switching closes the modern gap |
 | Max drawdown | ≤ 25% | Composite should improve on SMA's 33.7% |
-| Trade frequency | ≥ 30 trades | Confirm ML is actively contributing (2x SMA's 15) |
+| Trade frequency | ≥ 30 total trades, with ≥ 10 from XGBoost in Choppy regime | Confirm ML is actively contributing, not just shadowing SMA |
 
 **Diagnostic (not a gate):** Regime residency breakdown — percentage of trading days spent in SMA mode vs XGBoost mode. If >95% of days are SMA mode, the ML is not contributing meaningfully.
 
@@ -23,7 +23,7 @@ A composite strategy that routes signals through a regime detector: SMA crossove
 |---|---|---|
 | Regime detection | Rule-based (vol + 20d return) | Already proven in Phase 2.1 experiments; adding complexity hasn't helped |
 | Regime transition | Immediate handoff, position inherits | Simplest; avoids unnecessary transaction costs from flattening |
-| XGBoost config | 6 features, 20-day horizon, threshold 0.40 | Best validated config from Phase 2.1 (Sharpe 0.79/0.79) |
+| XGBoost config | 6 features, 20-day horizon, threshold 0.50 | Validated config from Phase 2.1 (Sharpe 0.76/0.68). Threshold 0.40 showed improvement in sweep but was tested with a custom evaluator; use 0.50 as the conservative default and tune threshold as a post-implementation optimization. |
 | SMA config | Existing Phase 1 crossover (SMA 50/200) | Proven strategy, no changes needed |
 
 ## Architecture
@@ -39,7 +39,7 @@ Daily pipeline:
 
   2. Route to active strategy:
      - Bull or Bear → signal = SMA crossover (golden cross / death cross)
-     - Choppy → signal = XGBoost prediction (20-day horizon, threshold 0.40)
+     - Choppy → signal = XGBoost prediction (20-day horizon, threshold 0.50)
 
   3. Execute signal
      - Position carries across regime transitions
@@ -51,6 +51,8 @@ Daily pipeline:
 Same logic validated in Phase 2.1:
 
 ```python
+# vol_median MUST be computed as a rolling window up to the current day only
+# to avoid look-ahead bias. Never precompute on full dataset.
 vol_median = volatility_20d.rolling(252).median()
 
 if log_return_20d > 0 and volatility_20d < vol_median:
@@ -61,6 +63,10 @@ else:
     regime = CHOPPY
 ```
 
+**Look-ahead prevention:** The 252-day rolling median must be computed strictly from data available up to and including the current day. In walk-forward evaluation, this means computing regime labels incrementally within each test window using only backward-looking data — never precomputing on the full dataset.
+
+**Shared implementation:** The `regime_label` feature used in XGBoost training and the regime detection for signal routing MUST use the same `detect_regime()` function to guarantee consistency.
+
 **Why this works:** Bull markets have positive returns and low volatility. Bear markets have negative returns and high volatility. Choppy markets are everything in between — sideways action, uncertain direction, or volatility without a clear trend. The SMA crossover excels in the first two; the XGBoost model handles the third.
 
 ### Regime Transitions
@@ -69,6 +75,8 @@ When regime changes (e.g., Choppy → Bull):
 - The new strategy takes over immediately
 - The current position is inherited — no forced flattening
 - If SMA says HOLD and the previous XGBoost position was long, the position stays long until SMA generates a SELL signal
+
+**SMA state on transition:** The SMA crossover is stateless — it only generates BUY/SELL on actual crossover days, and HOLD otherwise. When transitioning from Choppy → Bull/Bear, if no crossover occurs that day, SMA outputs HOLD and the inherited position is maintained. The position will only change when the SMA detects its next crossover event. This is correct behavior — the SMA component should not act on stale crossover state from before the Choppy period.
 
 This avoids unnecessary transaction costs from closing positions just because the regime changed.
 
@@ -79,8 +87,8 @@ Uses the best validated configuration from Phase 2.1:
 - **Features:** log_return_5d, log_return_20d, volatility_20d, credit_spread, dollar_momentum, regime_label
 - **Prediction horizon:** 20-day forward return
 - **Label thresholds:** UP > +1%, DOWN < -1%, FLAT in between
-- **Signal threshold:** 0.40 (act on moderate confidence)
-- **Signal mapping:** BUY if argmax=UP and P(UP) > 0.40, SELL if argmax=DOWN and P(DOWN) > 0.40, HOLD otherwise
+- **Signal threshold:** 0.50 (conservative default; threshold tuning is a post-implementation optimization)
+- **Signal mapping:** BUY if argmax=UP and P(UP) > 0.50, SELL if argmax=DOWN and P(DOWN) > 0.50, HOLD otherwise
 
 ### SMA Crossover Component
 
@@ -109,12 +117,14 @@ For each walk-forward window (2yr train, 6mo test, 6mo roll):
 
 ### SMA Signal in Walk-Forward
 
-The SMA crossover signal requires detecting golden/death crosses. Within each test window:
-- Compute SMA50 and SMA200 from the close prices available up to and including each test day
-- Check if SMA50 crossed above SMA200 (BUY) or below (SELL) compared to the previous day
-- If no crossover: HOLD
+The SMA crossover signal requires detecting golden/death crosses. For each test day:
+- Pass **full price history from dataset start through the current test day** to `generate_signal()` — not just the training window. SMA200 requires at least 200 days of warmup, and crossover detection needs the previous day's SMA values.
+- The function returns BUY (golden cross), SELL (death cross), or HOLD (no crossover).
+- This ensures SMA signals are computed identically to how they would be in live production.
 
-This uses the same `generate_signal` function from `sma_crossover.py`, applied to the price history up to each test day.
+### Position State Across Windows
+
+Position resets to 0 (flat) at the start of each walk-forward test window. Within a window, position carries across regime transitions. This is a simulation constraint — in live trading, position would be continuous.
 
 ### Metrics Computed
 
@@ -144,7 +154,7 @@ SchroederTrader/
 
 **`regime_detector.py`** — Stateless regime classification.
 - `detect_regime(log_return_20d, volatility_20d, vol_median) -> Regime`
-- `compute_regimes(df) -> Series` — vectorized regime labels for a DataFrame
+- `compute_regimes(df) -> Series` — vectorized regime labels using rolling 252-day median (backward-looking only)
 - `Regime` enum: BULL, BEAR, CHOPPY
 
 **`composite.py`** — Signal routing logic.
