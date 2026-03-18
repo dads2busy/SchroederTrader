@@ -8,12 +8,15 @@ dependencies = [
     "yfinance>=0.2.40",
     "pandas>=2.2.0",
     "python-dotenv>=1.0.0",
+    "xgboost>=2.0.0",
+    "scikit-learn>=1.4.0",
 ]
 
 [project.optional-dependencies]
 backtest = [
     "vectorbt>=0.26.0",
     "kaleido>=0.2.0",
+    "shap>=0.45.0",
 ]
 dev = [
     "pytest>=8.0.0",

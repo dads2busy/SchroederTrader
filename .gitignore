@@ -19,5 +19,8 @@ logs/
 # OS
 .DS_Store
 
+# ML models
+models/
+
 # Worktrees
 .worktrees/
