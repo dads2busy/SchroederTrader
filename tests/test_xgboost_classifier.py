@@ -36,8 +36,9 @@ def test_predict_signal_returns_signal_and_proba():
     split = int(len(X) * 0.8)
     model = train_model(X[:split], y[:split], X[split:], y[split:])
 
-    signal, proba = predict_signal(model, X.iloc[[0]])
+    signal, pred_class, proba = predict_signal(model, X.iloc[[0]])
     assert isinstance(signal, Signal)
+    assert pred_class in {0, 1, 2}
     assert "DOWN" in proba
     assert "FLAT" in proba
     assert "UP" in proba
@@ -51,7 +52,7 @@ def test_predict_signal_buy_on_high_up_proba():
 
     # Find a row with strong UP signal (f1 >> 0.5)
     strong_up = pd.DataFrame({"f1": [3.0], "f2": [0.0], "f3": [0.0]})
-    signal, proba = predict_signal(model, strong_up)
+    signal, pred_class, proba = predict_signal(model, strong_up)
     # With clear signal, should predict BUY
     assert signal == Signal.BUY or proba["UP"] > 0.3  # model may not be perfect on synthetic
 
@@ -62,7 +63,7 @@ def test_predict_signal_sell_on_high_down_proba():
     model = train_model(X[:split], y[:split], X[split:], y[split:])
 
     strong_down = pd.DataFrame({"f1": [-3.0], "f2": [0.0], "f3": [0.0]})
-    signal, proba = predict_signal(model, strong_down)
+    signal, pred_class, proba = predict_signal(model, strong_down)
     assert signal == Signal.SELL or proba["DOWN"] > 0.3
 
 
@@ -77,8 +78,8 @@ def test_save_and_load_model(tmp_path):
 
     loaded = load_model(model_path)
     # Verify loaded model produces same predictions
-    signal_orig, proba_orig = predict_signal(model, X.iloc[[0]])
-    signal_loaded, proba_loaded = predict_signal(loaded, X.iloc[[0]])
+    signal_orig, _, proba_orig = predict_signal(model, X.iloc[[0]])
+    signal_loaded, _, proba_loaded = predict_signal(loaded, X.iloc[[0]])
     assert signal_orig == signal_loaded
     assert abs(proba_orig["UP"] - proba_loaded["UP"]) < 0.001
 

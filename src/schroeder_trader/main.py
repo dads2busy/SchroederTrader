@@ -153,9 +153,7 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
                     "log_return_5d", "log_return_20d", "volatility_20d",
                     "sma_ratio", "volume_ratio", "rsi_14",
                 ]
-                ml_signal, proba = predict_signal(model, last_row[feature_cols])
-                class_map = {"SELL": 0, "HOLD": 1, "BUY": 2}
-                pred_class = class_map.get(ml_signal.value, 1)
+                ml_signal, pred_class, proba = predict_signal(model, last_row[feature_cols])
                 log_shadow_signal(
                     conn, now, TICKER, close_price,
                     predicted_class=pred_class,

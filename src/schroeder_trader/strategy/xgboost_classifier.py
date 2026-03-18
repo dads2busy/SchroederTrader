@@ -44,8 +44,14 @@ def train_model(
     return model
 
 
-def predict_signal(model: XGBClassifier, features_row: pd.DataFrame) -> tuple[Signal, dict]:
-    """Generate a trading signal from model prediction."""
+def predict_signal(model: XGBClassifier, features_row: pd.DataFrame) -> tuple[Signal, int, dict]:
+    """Generate a trading signal from model prediction.
+
+    Returns:
+        Tuple of (Signal, predicted_class, probability_dict).
+        predicted_class is the argmax class (0=DOWN, 1=FLAT, 2=UP).
+        probability_dict has keys "DOWN", "FLAT", "UP".
+    """
     proba = model.predict_proba(features_row)[0]
     proba_dict = {
         "DOWN": float(proba[CLASS_DOWN]),
@@ -56,11 +62,11 @@ def predict_signal(model: XGBClassifier, features_row: pd.DataFrame) -> tuple[Si
     predicted_class = int(np.argmax(proba))
 
     if predicted_class == CLASS_UP and proba[CLASS_UP] > 0.5:
-        return Signal.BUY, proba_dict
+        return Signal.BUY, predicted_class, proba_dict
     elif predicted_class == CLASS_DOWN and proba[CLASS_DOWN] > 0.5:
-        return Signal.SELL, proba_dict
+        return Signal.SELL, predicted_class, proba_dict
     else:
-        return Signal.HOLD, proba_dict
+        return Signal.HOLD, predicted_class, proba_dict
 
 
 def save_model(model: XGBClassifier, path: Path) -> None:
