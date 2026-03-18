@@ -51,7 +51,7 @@ def test_log_portfolio(tmp_path):
     now = datetime.now(timezone.utc)
     log_portfolio(conn, now, 5000.0, 45, 23539.5, 28539.5)
     row = conn.execute("SELECT * FROM portfolio WHERE id = 1").fetchone()
-    assert row[3] == 5000.0  # cash
+    assert row[2] == 5000.0  # cash
     conn.close()
 
 

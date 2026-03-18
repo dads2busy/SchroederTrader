@@ -37,7 +37,6 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS portfolio (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
-            signal_id INTEGER,
             cash REAL NOT NULL,
             position_qty INTEGER NOT NULL,
             position_value REAL NOT NULL,
@@ -95,7 +94,6 @@ def log_portfolio(
         "INSERT INTO portfolio (timestamp, cash, position_qty, position_value, total_value) VALUES (?, ?, ?, ?, ?)",
         (timestamp.isoformat(), cash, position_qty, position_value, total_value),
     )
-    # Note: signal_id column (index 2) is NULL by default, cash is at index 3
     conn.commit()
     return cursor.lastrowid
 
