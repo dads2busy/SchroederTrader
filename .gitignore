@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Secrets
+.env
+
+# Data
+data/trades.db
+backtest/data/*.csv
+
+# Logs
+logs/
+
+# OS
+.DS_Store

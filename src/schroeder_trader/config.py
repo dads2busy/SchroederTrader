@@ -1,0 +1,28 @@
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Paths
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DB_PATH = PROJECT_ROOT / "data" / "trades.db"
+LOG_DIR = PROJECT_ROOT / "logs"
+
+# Trading parameters
+TICKER = "SPY"
+SMA_SHORT_WINDOW = 50
+SMA_LONG_WINDOW = 200
+CASH_BUFFER_PCT = 0.02
+SLIPPAGE_ESTIMATE = 0.0005
+
+# Alpaca
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
+ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+# Email
+ALERT_EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM", "")
+ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO", "")
+ALERT_EMAIL_APP_PASSWORD = os.getenv("ALERT_EMAIL_APP_PASSWORD", "")
