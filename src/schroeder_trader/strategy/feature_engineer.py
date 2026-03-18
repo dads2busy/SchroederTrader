@@ -55,6 +55,50 @@ class FeaturePipeline:
 
         return result
 
+    def compute_features_extended(
+        self, spy_df: pd.DataFrame, ext_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Compute the 6-feature set used by the composite model.
+
+        Features: log_return_5d, log_return_20d, volatility_20d,
+                  credit_spread, dollar_momentum, regime_label (added later).
+
+        Args:
+            spy_df: SPY OHLCV DataFrame (DatetimeIndex).
+            ext_df: External features DataFrame with at least
+                    ``credit_spread`` and ``dollar_momentum`` columns
+                    (DatetimeIndex named "date").
+
+        Returns:
+            DataFrame with feature columns; NaN rows dropped
+            (except ``regime_label`` which is added by the caller).
+        """
+        result = spy_df.copy()
+
+        # Momentum
+        result["log_return_5d"] = np.log(result["close"] / result["close"].shift(5))
+        result["log_return_20d"] = np.log(result["close"] / result["close"].shift(20))
+
+        # Risk regime
+        result["volatility_20d"] = result["close"].pct_change().rolling(20).std()
+
+        # Merge external features (forward-fill to cover market holidays)
+        if ext_df is not None and len(ext_df) > 0:
+            ext_cols = [c for c in ("credit_spread", "dollar_momentum") if c in ext_df.columns]
+            if ext_cols:
+                result = result.join(ext_df[ext_cols], how="left")
+                result[ext_cols] = result[ext_cols].ffill()
+
+        # Drop rows where core features are NaN
+        core_cols = [
+            "log_return_5d", "log_return_20d", "volatility_20d",
+            "credit_spread", "dollar_momentum",
+        ]
+        existing_cols = [c for c in core_cols if c in result.columns]
+        result = result.dropna(subset=existing_cols)
+
+        return result
+
     def compute_features_with_labels(self, df: pd.DataFrame) -> pd.DataFrame:
         """Compute features + forward-looking label for training.
 

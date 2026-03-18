@@ -1,14 +1,26 @@
 import json
 import logging
+import subprocess
 import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-from schroeder_trader.config import DB_PATH, PROJECT_ROOT, TICKER
+import numpy as np
+import pandas as pd
+
+from schroeder_trader.config import (
+    COMPOSITE_MODEL_PATH,
+    DB_PATH,
+    FEATURES_CSV_PATH,
+    PROJECT_ROOT,
+    TICKER,
+)
 from schroeder_trader.logging_config import setup_logging
 from schroeder_trader.data.market_data import fetch_daily_bars, is_market_open_today
-from schroeder_trader.strategy.sma_crossover import generate_signal
+from schroeder_trader.strategy.sma_crossover import Signal, generate_signal
+from schroeder_trader.strategy.composite import composite_signal_hybrid, count_consecutive_bear_days
+from schroeder_trader.strategy.regime_detector import Regime, detect_regime
 from schroeder_trader.risk.risk_manager import evaluate
 from schroeder_trader.execution.broker import (
     submit_order,
@@ -27,7 +39,7 @@ from schroeder_trader.storage.trade_log import (
     log_shadow_signal,
 )
 from schroeder_trader.strategy.feature_engineer import FeaturePipeline
-from schroeder_trader.strategy.xgboost_classifier import load_model, predict_signal
+from schroeder_trader.strategy.xgboost_classifier import load_model
 from schroeder_trader.alerts.email_alert import (
     send_trade_alert,
     send_fill_alert,
@@ -36,8 +48,6 @@ from schroeder_trader.alerts.email_alert import (
 )
 
 logger = logging.getLogger(__name__)
-
-MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_spy.json"
 
 
 def run_pipeline(db_path: Path = DB_PATH) -> None:
@@ -140,31 +150,123 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
         sma_200=sma_200,
     )
 
-    # Step 10: Shadow ML prediction
+    # Step 10: Composite shadow signal
     try:
-        model = load_model(MODEL_PATH)
-        if model is not None:
+        # Fetch/update external features (idempotent, skips if <24h old)
+        try:
+            subprocess.run(
+                ["uv", "run", "python", str(PROJECT_ROOT / "backtest" / "download_features.py")],
+                cwd=str(PROJECT_ROOT), capture_output=True, timeout=120,
+            )
+        except Exception:
+            logger.warning("External feature download failed, using cached data")
+
+        # Load composite model
+        model = load_model(COMPOSITE_MODEL_PATH)
+        if model is None:
+            logger.info("No composite model at %s, skipping shadow step", COMPOSITE_MODEL_PATH)
+        elif list(model.classes_) != [0, 1, 2]:
+            logger.error("Model classes %s don't match expected [0, 1, 2]", list(model.classes_))
+        elif not FEATURES_CSV_PATH.exists():
+            logger.warning("No external features at %s, skipping shadow step", FEATURES_CSV_PATH)
+        else:
+            class_to_idx = {int(c): i for i, c in enumerate(model.classes_)}
+            idx_up = class_to_idx[2]
+            idx_down = class_to_idx[0]
+
+            # Load external features
+            ext_df = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
+
+            # Fetch 400 days of SPY data for feature warmup
             shadow_df = fetch_daily_bars(TICKER, days=400)
+
+            # Compute extended features
             pipeline = FeaturePipeline()
-            features = pipeline.compute_features(shadow_df)
+            features = pipeline.compute_features_extended(shadow_df, ext_df)
+
             if len(features) > 0:
-                last_row = features.iloc[[-1]]
+                # Compute regime labels (backward-looking)
+                log_ret_20d = np.log(features["close"] / features["close"].shift(20))
+                vol_20d = features["close"].pct_change().rolling(20).std()
+                vol_med = vol_20d.rolling(252).median()
+
+                regime_series = pd.Series(index=features.index, dtype=object)
+                for idx in range(len(features)):
+                    lr = log_ret_20d.iloc[idx]
+                    vol = vol_20d.iloc[idx]
+                    vm = vol_med.iloc[idx]
+                    if pd.isna(lr) or pd.isna(vol) or pd.isna(vm):
+                        regime_series.iloc[idx] = np.nan
+                    else:
+                        regime_series.iloc[idx] = detect_regime(lr, vol, vm)
+
+                # Add regime_label as integer feature
+                regime_map = {Regime.BEAR: 0, Regime.CHOPPY: 1, Regime.BULL: 2}
+                features["regime_label"] = regime_series.map(regime_map)
+
+                # Today's data
+                today_regime = regime_series.iloc[-1]
+                if not isinstance(today_regime, Regime):
+                    today_regime = Regime.CHOPPY
+
+                bear_days = count_consecutive_bear_days(regime_series)
+
+                # XGBoost signals at both thresholds
                 feature_cols = [
                     "log_return_5d", "log_return_20d", "volatility_20d",
-                    "sma_ratio", "volume_ratio", "rsi_14",
+                    "credit_spread", "dollar_momentum", "regime_label",
                 ]
-                ml_signal, pred_class, proba = predict_signal(model, last_row[feature_cols])
-                log_shadow_signal(
-                    conn, now, TICKER, close_price,
-                    predicted_class=pred_class,
-                    predicted_proba=json.dumps(proba),
-                    ml_signal=ml_signal.value,
-                    sma_signal=signal.value,
-                )
-                logger.info("Shadow ML signal: %s (UP=%.2f, FLAT=%.2f, DOWN=%.2f)",
-                           ml_signal.value, proba["UP"], proba["FLAT"], proba["DOWN"])
+                last_row = features[feature_cols].iloc[[-1]]
+
+                if last_row.isna().any().any():
+                    logger.warning("NaN in feature row, skipping shadow signal")
+                else:
+                    proba = model.predict_proba(last_row)[0]
+                    pred_class = int(np.argmax(proba))
+                    proba_dict = {
+                        "DOWN": float(proba[idx_down]),
+                        "FLAT": float(proba[class_to_idx[1]]),
+                        "UP": float(proba[idx_up]),
+                    }
+
+                    # Low threshold (0.35) for Choppy
+                    if pred_class == idx_up and proba[idx_up] > 0.35:
+                        xgb_low = Signal.BUY
+                    elif pred_class == idx_down and proba[idx_down] > 0.35:
+                        xgb_low = Signal.SELL
+                    else:
+                        xgb_low = Signal.HOLD
+
+                    # High threshold (0.50) for late Bear
+                    if pred_class == idx_up and proba[idx_up] > 0.50:
+                        xgb_high = Signal.BUY
+                    elif pred_class == idx_down and proba[idx_down] > 0.50:
+                        xgb_high = Signal.SELL
+                    else:
+                        xgb_high = Signal.HOLD
+
+                    # Route composite signal
+                    composite_sig, source = composite_signal_hybrid(
+                        today_regime, signal, xgb_low, xgb_high, bear_days,
+                    )
+
+                    # Log shadow signal
+                    log_shadow_signal(
+                        conn, now, TICKER, close_price,
+                        predicted_class=pred_class if source == "XGB" else None,
+                        predicted_proba=json.dumps(proba_dict) if source == "XGB" else None,
+                        ml_signal=composite_sig.value,
+                        sma_signal=signal.value,
+                        regime=today_regime.value,
+                        signal_source=source,
+                        bear_day_count=bear_days if today_regime == Regime.BEAR else None,
+                    )
+                    logger.info(
+                        "Shadow composite: %s (source=%s, regime=%s, bear_days=%d)",
+                        composite_sig.value, source, today_regime.value, bear_days,
+                    )
     except Exception:
-        logger.exception("Shadow ML prediction failed (non-fatal)")
+        logger.exception("Shadow composite prediction failed (non-fatal)")
 
     conn.close()
     logger.info("Pipeline complete")
