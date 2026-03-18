@@ -49,12 +49,21 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             timestamp TEXT NOT NULL,
             ticker TEXT NOT NULL,
             close_price REAL NOT NULL,
-            predicted_class INTEGER NOT NULL,
-            predicted_proba TEXT NOT NULL,
+            predicted_class INTEGER,
+            predicted_proba TEXT,
             ml_signal TEXT NOT NULL,
-            sma_signal TEXT NOT NULL
+            sma_signal TEXT NOT NULL,
+            regime TEXT,
+            signal_source TEXT,
+            bear_day_count INTEGER
         )
     """)
+    # Defensive migration for existing databases missing new columns
+    for col, col_type in [("regime", "TEXT"), ("signal_source", "TEXT"), ("bear_day_count", "INTEGER")]:
+        try:
+            conn.execute(f"ALTER TABLE shadow_signals ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.commit()
     return conn
 
@@ -145,14 +154,17 @@ def log_shadow_signal(
     timestamp: datetime,
     ticker: str,
     close_price: float,
-    predicted_class: int,
-    predicted_proba: str,
+    predicted_class: int | None,
+    predicted_proba: str | None,
     ml_signal: str,
     sma_signal: str,
+    regime: str | None = None,
+    signal_source: str | None = None,
+    bear_day_count: int | None = None,
 ) -> int:
     cursor = conn.execute(
-        "INSERT INTO shadow_signals (timestamp, ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (timestamp.isoformat(), ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal),
+        "INSERT INTO shadow_signals (timestamp, ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (timestamp.isoformat(), ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count),
     )
     conn.commit()
     return cursor.lastrowid

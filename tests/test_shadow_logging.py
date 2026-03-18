@@ -60,3 +60,54 @@ def test_existing_tables_unchanged(tmp_path):
     tables = {row[0] for row in cursor.fetchall()}
     assert {"signals", "orders", "portfolio", "shadow_signals"} <= tables
     conn.close()
+
+
+def test_shadow_signal_with_regime_and_source(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    now = datetime.now(timezone.utc)
+
+    signal_id = log_shadow_signal(
+        conn, now, "SPY", 523.10,
+        predicted_class=None,
+        predicted_proba=None,
+        ml_signal="SELL",
+        sma_signal="HOLD",
+        regime="BEAR",
+        signal_source="FLAT",
+        bear_day_count=5,
+    )
+    assert signal_id is not None
+
+    row = conn.execute("SELECT * FROM shadow_signals WHERE id = ?", (signal_id,)).fetchone()
+    assert row["regime"] == "BEAR"
+    assert row["signal_source"] == "FLAT"
+    assert row["bear_day_count"] == 5
+    assert row["predicted_class"] is None
+    assert row["predicted_proba"] is None
+    conn.close()
+
+
+def test_shadow_signal_xgb_with_proba(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = init_db(db_path)
+    now = datetime.now(timezone.utc)
+    proba = json.dumps({"DOWN": 0.1, "FLAT": 0.3, "UP": 0.6})
+
+    signal_id = log_shadow_signal(
+        conn, now, "SPY", 523.10,
+        predicted_class=2,
+        predicted_proba=proba,
+        ml_signal="BUY",
+        sma_signal="HOLD",
+        regime="CHOPPY",
+        signal_source="XGB",
+        bear_day_count=None,
+    )
+
+    row = conn.execute("SELECT * FROM shadow_signals WHERE id = ?", (signal_id,)).fetchone()
+    assert row["predicted_class"] == 2
+    assert row["regime"] == "CHOPPY"
+    assert row["signal_source"] == "XGB"
+    assert row["bear_day_count"] is None
+    conn.close()
