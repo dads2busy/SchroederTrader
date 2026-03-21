@@ -75,6 +75,12 @@ class FeaturePipeline:
         """
         result = spy_df.copy()
 
+        # Normalize index: strip timezone so join with tz-naive ext_df works
+        if hasattr(result.index, "tz") and result.index.tz is not None:
+            result.index = result.index.tz_localize(None)
+        # Normalize to date-only (daily resolution) to match ext_df
+        result.index = result.index.normalize()
+
         # Momentum
         result["log_return_5d"] = np.log(result["close"] / result["close"].shift(5))
         result["log_return_20d"] = np.log(result["close"] / result["close"].shift(20))

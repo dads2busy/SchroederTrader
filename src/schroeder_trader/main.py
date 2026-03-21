@@ -177,8 +177,9 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
             # Load external features
             ext_df = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
 
-            # Fetch 400 days of SPY data for feature warmup
-            shadow_df = fetch_daily_bars(TICKER, days=400)
+            # Fetch 600 days of SPY data for feature + regime warmup
+            # (regime needs 252-day rolling median + 20-day vol window)
+            shadow_df = fetch_daily_bars(TICKER, days=600)
 
             # Compute extended features
             pipeline = FeaturePipeline()
