@@ -20,6 +20,8 @@ SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
 CASH_BUFFER_PCT = 0.02
 SLIPPAGE_ESTIMATE = 0.0005
+KELLY_MULTIPLIER = 0.5           # half-Kelly default (configurable)
+KELLY_WIN_LOSS_RATIO = 1.0       # placeholder — derived from backtest
 
 # Alpaca
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
