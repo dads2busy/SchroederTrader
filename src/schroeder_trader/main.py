@@ -13,9 +13,12 @@ from schroeder_trader.config import (
     COMPOSITE_MODEL_PATH,
     DB_PATH,
     FEATURES_CSV_PATH,
+    KELLY_MULTIPLIER,
+    KELLY_WIN_LOSS_RATIO,
     PROJECT_ROOT,
     TICKER,
 )
+from schroeder_trader.risk.kelly import kelly_fraction as compute_kelly_fraction, kelly_qty as compute_kelly_qty
 from schroeder_trader.logging_config import setup_logging
 from schroeder_trader.data.market_data import fetch_daily_bars, is_market_open_today
 from schroeder_trader.strategy.sma_crossover import Signal, generate_signal
@@ -251,6 +254,18 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
                         today_regime, signal, xgb_low, xgb_high, bear_days,
                     )
 
+                    # Compute Kelly sizing (XGB sources only)
+                    k_frac = None
+                    k_qty = None
+                    if source == "XGB":
+                        k_frac = compute_kelly_fraction(
+                            p_up=proba[idx_up],
+                            p_down=proba[idx_down],
+                            win_loss_ratio=KELLY_WIN_LOSS_RATIO,
+                            kelly_multiplier=KELLY_MULTIPLIER,
+                        )
+                        k_qty = compute_kelly_qty(k_frac, account["portfolio_value"], close_price)
+
                     # Log shadow signal
                     log_shadow_signal(
                         conn, now, TICKER, close_price,
@@ -261,10 +276,13 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
                         regime=today_regime.value,
                         signal_source=source,
                         bear_day_count=bear_days if today_regime == Regime.BEAR else None,
+                        kelly_fraction=k_frac,
+                        kelly_qty=k_qty,
                     )
                     logger.info(
-                        "Shadow composite: %s (source=%s, regime=%s, bear_days=%d)",
+                        "Shadow composite: %s (source=%s, regime=%s, bear_days=%d, kelly=%.3f, kelly_qty=%d)",
                         composite_sig.value, source, today_regime.value, bear_days,
+                        k_frac or 0.0, k_qty or 0,
                     )
     except Exception:
         logger.exception("Shadow composite prediction failed (non-fatal)")
