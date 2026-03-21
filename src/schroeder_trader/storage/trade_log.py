@@ -55,11 +55,16 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             sma_signal TEXT NOT NULL,
             regime TEXT,
             signal_source TEXT,
-            bear_day_count INTEGER
+            bear_day_count INTEGER,
+            kelly_fraction REAL,
+            kelly_qty INTEGER
         )
     """)
     # Defensive migration for existing databases missing new columns
-    for col, col_type in [("regime", "TEXT"), ("signal_source", "TEXT"), ("bear_day_count", "INTEGER")]:
+    for col, col_type in [
+        ("regime", "TEXT"), ("signal_source", "TEXT"), ("bear_day_count", "INTEGER"),
+        ("kelly_fraction", "REAL"), ("kelly_qty", "INTEGER"),
+    ]:
         try:
             conn.execute(f"ALTER TABLE shadow_signals ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError:
@@ -161,10 +166,12 @@ def log_shadow_signal(
     regime: str | None = None,
     signal_source: str | None = None,
     bear_day_count: int | None = None,
+    kelly_fraction: float | None = None,
+    kelly_qty: int | None = None,
 ) -> int:
     cursor = conn.execute(
-        "INSERT INTO shadow_signals (timestamp, ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (timestamp.isoformat(), ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count),
+        "INSERT INTO shadow_signals (timestamp, ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count, kelly_fraction, kelly_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (timestamp.isoformat(), ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count, kelly_fraction, kelly_qty),
     )
     conn.commit()
     return cursor.lastrowid

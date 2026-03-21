@@ -1,6 +1,8 @@
 import sqlite3
 from datetime import datetime, timezone
 
+import pytest
+
 from schroeder_trader.storage.trade_log import (
     init_db,
     log_signal,
@@ -9,6 +11,8 @@ from schroeder_trader.storage.trade_log import (
     get_signal_by_date,
     get_pending_orders,
     update_order_fill,
+    log_shadow_signal,
+    get_shadow_signals,
 )
 
 
@@ -95,4 +99,50 @@ def test_update_order_fill(tmp_path):
     row = conn.execute("SELECT fill_price, status FROM orders WHERE id = ?", (order_id,)).fetchone()
     assert row[0] == 523.50
     assert row[1] == "FILLED"
+    conn.close()
+
+
+def test_log_shadow_signal_with_kelly(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+    log_shadow_signal(
+        conn,
+        timestamp=datetime(2026, 3, 21, 16, 30),
+        ticker="SPY",
+        close_price=650.0,
+        predicted_class=2,
+        predicted_proba='{"DOWN": 0.2, "FLAT": 0.2, "UP": 0.6}',
+        ml_signal="BUY",
+        sma_signal="HOLD",
+        regime="CHOPPY",
+        signal_source="XGB",
+        bear_day_count=None,
+        kelly_fraction=0.233,
+        kelly_qty=35,
+    )
+    rows = get_shadow_signals(conn)
+    assert len(rows) == 1
+    assert rows[0]["kelly_fraction"] == pytest.approx(0.233)
+    assert rows[0]["kelly_qty"] == 35
+    conn.close()
+
+
+def test_log_shadow_signal_kelly_null_for_non_xgb(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+    log_shadow_signal(
+        conn,
+        timestamp=datetime(2026, 3, 21, 16, 30),
+        ticker="SPY",
+        close_price=650.0,
+        predicted_class=None,
+        predicted_proba=None,
+        ml_signal="SELL",
+        sma_signal="HOLD",
+        regime="BEAR",
+        signal_source="FLAT",
+        bear_day_count=3,
+    )
+    rows = get_shadow_signals(conn)
+    assert len(rows) == 1
+    assert rows[0]["kelly_fraction"] is None
+    assert rows[0]["kelly_qty"] is None
     conn.close()
