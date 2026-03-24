@@ -266,11 +266,11 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
                         )
                         k_qty = compute_kelly_qty(k_frac, account["portfolio_value"], close_price)
 
-                    # Log shadow signal
+                    # Log shadow signal (always log XGB prediction for analysis)
                     log_shadow_signal(
                         conn, now, TICKER, close_price,
-                        predicted_class=pred_class if source == "XGB" else None,
-                        predicted_proba=json.dumps(proba_dict) if source == "XGB" else None,
+                        predicted_class=pred_class,
+                        predicted_proba=json.dumps(proba_dict),
                         ml_signal=composite_sig.value,
                         sma_signal=signal.value,
                         regime=today_regime.value,
