@@ -92,7 +92,11 @@ class FeaturePipeline:
         if ext_df is not None and len(ext_df) > 0:
             ext_cols = [c for c in ("credit_spread", "dollar_momentum") if c in ext_df.columns]
             if ext_cols:
-                result = result.join(ext_df[ext_cols], how="left")
+                ext = ext_df[ext_cols].copy()
+                if hasattr(ext.index, "tz") and ext.index.tz is not None:
+                    ext.index = ext.index.tz_localize(None)
+                ext.index = ext.index.normalize()
+                result = result.join(ext, how="left")
                 result[ext_cols] = result[ext_cols].ffill()
 
         # Drop rows where core features are NaN
