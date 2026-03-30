@@ -254,17 +254,14 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
                         today_regime, signal, xgb_low, xgb_high, bear_days,
                     )
 
-                    # Compute Kelly sizing (XGB sources only)
-                    k_frac = None
-                    k_qty = None
-                    if source == "XGB":
-                        k_frac = compute_kelly_fraction(
-                            p_up=proba[idx_up],
-                            p_down=proba[idx_down],
-                            win_loss_ratio=KELLY_WIN_LOSS_RATIO,
-                            kelly_multiplier=KELLY_MULTIPLIER,
-                        )
-                        k_qty = compute_kelly_qty(k_frac, account["portfolio_value"], close_price)
+                    # Always compute Kelly sizing for analysis
+                    k_frac = compute_kelly_fraction(
+                        p_up=proba[idx_up],
+                        p_down=proba[idx_down],
+                        win_loss_ratio=KELLY_WIN_LOSS_RATIO,
+                        kelly_multiplier=KELLY_MULTIPLIER,
+                    )
+                    k_qty = compute_kelly_qty(k_frac, account["portfolio_value"], close_price)
 
                     # Log shadow signal (always log XGB prediction for analysis)
                     log_shadow_signal(
