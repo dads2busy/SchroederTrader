@@ -57,13 +57,16 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             signal_source TEXT,
             bear_day_count INTEGER,
             kelly_fraction REAL,
-            kelly_qty INTEGER
+            kelly_qty INTEGER,
+            high_water_mark REAL,
+            trailing_stop_triggered INTEGER
         )
     """)
     # Defensive migration for existing databases missing new columns
     for col, col_type in [
         ("regime", "TEXT"), ("signal_source", "TEXT"), ("bear_day_count", "INTEGER"),
         ("kelly_fraction", "REAL"), ("kelly_qty", "INTEGER"),
+        ("high_water_mark", "REAL"), ("trailing_stop_triggered", "INTEGER"),
     ]:
         try:
             conn.execute(f"ALTER TABLE shadow_signals ADD COLUMN {col} {col_type}")
@@ -168,10 +171,13 @@ def log_shadow_signal(
     bear_day_count: int | None = None,
     kelly_fraction: float | None = None,
     kelly_qty: int | None = None,
+    high_water_mark: float | None = None,
+    trailing_stop_triggered: bool | None = None,
 ) -> int:
+    trailing_stop_int = int(trailing_stop_triggered) if trailing_stop_triggered is not None else None
     cursor = conn.execute(
-        "INSERT INTO shadow_signals (timestamp, ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count, kelly_fraction, kelly_qty) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (timestamp.isoformat(), ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count, kelly_fraction, kelly_qty),
+        "INSERT INTO shadow_signals (timestamp, ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count, kelly_fraction, kelly_qty, high_water_mark, trailing_stop_triggered) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (timestamp.isoformat(), ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count, kelly_fraction, kelly_qty, high_water_mark, trailing_stop_int),
     )
     conn.commit()
     return cursor.lastrowid

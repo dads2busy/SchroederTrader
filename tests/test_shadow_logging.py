@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from schroeder_trader.storage.trade_log import (
     init_db,
@@ -85,6 +86,41 @@ def test_shadow_signal_with_regime_and_source(tmp_path):
     assert row["bear_day_count"] == 5
     assert row["predicted_class"] is None
     assert row["predicted_proba"] is None
+    conn.close()
+
+
+def test_shadow_signal_with_trailing_stop():
+    conn = init_db(Path(":memory:"))
+    now = datetime.now()
+    log_shadow_signal(
+        conn, now, "SPY", 650.0,
+        predicted_class=2,
+        predicted_proba='{"UP": 0.6}',
+        ml_signal="BUY",
+        sma_signal="HOLD",
+        high_water_mark=100000.0,
+        trailing_stop_triggered=True,
+    )
+    rows = get_shadow_signals(conn)
+    assert len(rows) == 1
+    assert rows[0]["high_water_mark"] == 100000.0
+    assert rows[0]["trailing_stop_triggered"] == 1
+    conn.close()
+
+
+def test_shadow_signal_trailing_stop_defaults_null():
+    conn = init_db(Path(":memory:"))
+    now = datetime.now()
+    log_shadow_signal(
+        conn, now, "SPY", 650.0,
+        predicted_class=None,
+        predicted_proba=None,
+        ml_signal="HOLD",
+        sma_signal="HOLD",
+    )
+    rows = get_shadow_signals(conn)
+    assert rows[0]["high_water_mark"] is None
+    assert rows[0]["trailing_stop_triggered"] is None
     conn.close()
 
 
