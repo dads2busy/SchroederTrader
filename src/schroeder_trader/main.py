@@ -4,6 +4,7 @@ import subprocess
 import sys
 import traceback
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import numpy as np
@@ -56,11 +57,21 @@ from schroeder_trader.alerts.email_alert import (
 logger = logging.getLogger(__name__)
 
 
+_ET = ZoneInfo("America/New_York")
+
+
 def run_pipeline(db_path: Path = DB_PATH) -> None:
     """Run the full trading pipeline."""
     conn = init_db(db_path)
+    try:
+        _run_pipeline_inner(conn)
+    finally:
+        conn.close()
+
+
+def _run_pipeline_inner(conn) -> None:
     now = datetime.now(timezone.utc)
-    today = now.strftime("%Y-%m-%d")
+    today = datetime.now(_ET).strftime("%Y-%m-%d")
 
     # Initialize trailing stop from DB state
     ts_row = conn.execute(
@@ -85,7 +96,6 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
     existing = get_signal_by_date(conn, today)
     if existing is not None:
         logger.info("Already ran today (%s), exiting", today)
-        conn.close()
         return
 
     # Step 2: Fill check for pending orders
@@ -117,7 +127,6 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
     # Step 3: Market calendar check
     if not is_market_open_today(today):
         logger.info("Market closed today (%s), exiting", today)
-        conn.close()
         return
 
     # Step 4: Fetch data
@@ -322,7 +331,6 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
     except Exception:
         logger.exception("Shadow composite prediction failed (non-fatal)")
 
-    conn.close()
     logger.info("Pipeline complete")
 
 
