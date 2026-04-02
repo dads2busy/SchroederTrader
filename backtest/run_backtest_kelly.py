@@ -135,7 +135,6 @@ def run():
             proba = model.predict_proba(pd.DataFrame(X_row, columns=XGB_FEATURES))[0]
 
             xgb_low = _xgb_signals_from_proba(proba, class_order, 0.35)
-            xgb_high = _xgb_signals_from_proba(proba, class_order, 0.50)
 
             regime = _regime_from_label(row["regime_label"])
 
@@ -155,7 +154,7 @@ def run():
             sma_signal = _sma_signal_for_day(close_up_to)
 
             signal, source = composite_signal_hybrid(
-                regime, sma_signal, xgb_low, xgb_high, bear_count,
+                regime, sma_signal, xgb_low,
             )
 
             # p_up and p_down for Kelly

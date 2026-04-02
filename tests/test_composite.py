@@ -10,49 +10,38 @@ from schroeder_trader.strategy.sma_crossover import Signal
 
 
 def test_hybrid_bull_routes_to_sma():
-    signal, source = composite_signal_hybrid(
-        Regime.BULL, Signal.BUY, Signal.SELL, Signal.SELL, bear_days=0,
-    )
+    signal, source = composite_signal_hybrid(Regime.BULL, Signal.BUY, Signal.SELL)
     assert signal == Signal.BUY
     assert source == "SMA"
 
 
-def test_hybrid_early_bear_routes_to_flat():
-    signal, source = composite_signal_hybrid(
-        Regime.BEAR, Signal.HOLD, Signal.BUY, Signal.BUY, bear_days=10,
-    )
+def test_hybrid_bear_always_flat():
+    signal, source = composite_signal_hybrid(Regime.BEAR, Signal.BUY, Signal.BUY)
     assert signal == Signal.SELL
     assert source == "FLAT"
 
 
-def test_hybrid_bear_day_20_still_flat():
-    signal, source = composite_signal_hybrid(
-        Regime.BEAR, Signal.HOLD, Signal.BUY, Signal.BUY, bear_days=20,
-    )
+def test_hybrid_bear_day_1_flat():
+    signal, source = composite_signal_hybrid(Regime.BEAR, Signal.HOLD, Signal.BUY)
     assert signal == Signal.SELL
     assert source == "FLAT"
 
 
-def test_hybrid_bear_day_21_routes_to_xgb_high():
-    signal, source = composite_signal_hybrid(
-        Regime.BEAR, Signal.HOLD, Signal.SELL, Signal.BUY, bear_days=21,
-    )
-    assert signal == Signal.BUY
-    assert source == "XGB"
+def test_hybrid_bear_day_100_still_flat():
+    """BEAR is always flat regardless of duration."""
+    signal, source = composite_signal_hybrid(Regime.BEAR, Signal.HOLD, Signal.BUY)
+    assert signal == Signal.SELL
+    assert source == "FLAT"
 
 
 def test_hybrid_choppy_routes_to_xgb_low():
-    signal, source = composite_signal_hybrid(
-        Regime.CHOPPY, Signal.BUY, Signal.SELL, Signal.HOLD, bear_days=0,
-    )
+    signal, source = composite_signal_hybrid(Regime.CHOPPY, Signal.BUY, Signal.SELL)
     assert signal == Signal.SELL
     assert source == "XGB"
 
 
 def test_hybrid_returns_tuple():
-    result = composite_signal_hybrid(
-        Regime.BULL, Signal.HOLD, Signal.HOLD, Signal.HOLD, bear_days=0,
-    )
+    result = composite_signal_hybrid(Regime.BULL, Signal.HOLD, Signal.HOLD)
     assert isinstance(result, tuple)
     assert len(result) == 2
     assert isinstance(result[0], Signal)

@@ -21,7 +21,6 @@ from schroeder_trader.config import (
     TRAILING_STOP_PCT,
     TRAILING_STOP_COOLDOWN_DAYS,
     XGB_THRESHOLD_LOW,
-    XGB_THRESHOLD_HIGH,
 )
 from schroeder_trader.risk.kelly import kelly_fraction as compute_kelly_fraction, kelly_qty as compute_kelly_qty
 from schroeder_trader.risk.trailing_stop import TrailingStop
@@ -261,17 +260,9 @@ def _run_pipeline_inner(conn) -> None:
                     else:
                         xgb_low = Signal.HOLD
 
-                    # High threshold for late Bear regime
-                    if pred_class == idx_up and proba[idx_up] > XGB_THRESHOLD_HIGH:
-                        xgb_high = Signal.BUY
-                    elif pred_class == idx_down and proba[idx_down] > XGB_THRESHOLD_HIGH:
-                        xgb_high = Signal.SELL
-                    else:
-                        xgb_high = Signal.HOLD
-
                     # Route composite signal
                     composite_sig, source = composite_signal_hybrid(
-                        today_regime, signal, xgb_low, xgb_high, bear_days,
+                        today_regime, signal, xgb_low,
                     )
 
                     # Always compute Kelly sizing for analysis
