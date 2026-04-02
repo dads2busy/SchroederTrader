@@ -190,10 +190,12 @@ def _run_pipeline_inner(conn) -> None:
     try:
         # Fetch/update external features (idempotent, skips if <24h old)
         try:
-            subprocess.run(
-                ["uv", "run", "python", str(PROJECT_ROOT / "backtest" / "download_features.py")],
+            result = subprocess.run(
+                [sys.executable, str(PROJECT_ROOT / "backtest" / "download_features.py")],
                 cwd=str(PROJECT_ROOT), capture_output=True, timeout=120,
             )
+            if result.returncode != 0:
+                logger.warning("External feature download failed (rc=%d), using cached data", result.returncode)
         except Exception:
             logger.warning("External feature download failed, using cached data")
 
