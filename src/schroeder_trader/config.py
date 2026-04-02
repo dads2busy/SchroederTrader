@@ -34,3 +34,7 @@ ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets
 ALERT_EMAIL_FROM = os.getenv("ALERT_EMAIL_FROM", "")
 ALERT_EMAIL_TO = os.getenv("ALERT_EMAIL_TO", "")
 ALERT_EMAIL_APP_PASSWORD = os.getenv("ALERT_EMAIL_APP_PASSWORD", "")
+
+# LLM
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+LLM_MODEL = "claude-haiku-4-5-20251001"
