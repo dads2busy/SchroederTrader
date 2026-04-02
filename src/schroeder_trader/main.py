@@ -288,11 +288,12 @@ def _run_pipeline_inner(conn) -> None:
                             "SELECT timestamp FROM shadow_signals ORDER BY id"
                         ).fetchall()
                     ]
+                    today_date = datetime.now(_ET).date()
                     ts_triggered = trailing_stop.update(
-                        account["portfolio_value"], now.date(),
+                        account["portfolio_value"], today_date,
                         trading_dates=ts_trading_dates,
                     )
-                    ts_in_cooldown = trailing_stop.in_cooldown(now.date(), ts_trading_dates)
+                    ts_in_cooldown = trailing_stop.in_cooldown(today_date, ts_trading_dates)
 
                     # Log shadow signal (always log XGB prediction for analysis)
                     log_shadow_signal(
