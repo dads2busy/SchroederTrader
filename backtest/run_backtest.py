@@ -5,7 +5,8 @@ from pathlib import Path
 import pandas as pd
 import vectorbt as vbt
 
-from schroeder_trader.config import SMA_SHORT_WINDOW, SMA_LONG_WINDOW, SLIPPAGE_ESTIMATE
+from schroeder_trader.config import SMA_SHORT_WINDOW, SMA_LONG_WINDOW
+from schroeder_trader.risk.transaction_cost import estimate_slippage
 
 DATA_DIR = Path(__file__).parent / "data"
 OUTPUT_DIR = Path(__file__).parent / "results"
@@ -33,6 +34,12 @@ def run_backtest() -> dict:
     df = load_data()
     close = df["Close"]
 
+    features_csv = DATA_DIR / "features_daily.csv"
+    vix_df = pd.read_csv(str(features_csv), index_col="date", parse_dates=True)["vix_close"]
+    fees = close.index.to_series().apply(
+        lambda d: estimate_slippage(vix_df.get(d.normalize(), 20.0))
+    )
+
     # Compute SMAs
     sma_short = vbt.MA.run(close, window=SMA_SHORT_WINDOW)
     sma_long = vbt.MA.run(close, window=SMA_LONG_WINDOW)
@@ -47,7 +54,7 @@ def run_backtest() -> dict:
         entries=entries,
         exits=exits,
         init_cash=10000,
-        fees=SLIPPAGE_ESTIMATE,
+        fees=fees,
         freq="1D",
     )
 
@@ -72,12 +79,13 @@ def run_backtest() -> dict:
     test_entries = entries[entries.index >= split_date]
     test_exits = exits[exits.index >= split_date]
 
+    test_fees = fees[fees.index >= split_date]
     test_portfolio = vbt.Portfolio.from_signals(
         test_close,
         entries=test_entries,
         exits=test_exits,
         init_cash=10000,
-        fees=SLIPPAGE_ESTIMATE,
+        fees=test_fees,
         freq="1D",
     )
     test_stats = test_portfolio.stats()
