@@ -17,7 +17,7 @@ from schroeder_trader.strategy.feature_engineer import (
     CLASS_FLAT,
     CLASS_UP,
 )
-from schroeder_trader.strategy.regime_detector import Regime, detect_regime
+from schroeder_trader.strategy.regime_detector import compute_regime_labels
 from schroeder_trader.strategy.xgboost_classifier import save_model
 from xgboost import XGBClassifier
 
@@ -58,22 +58,7 @@ def prepare_features() -> pd.DataFrame:
     features_df = pipeline.compute_features_extended(spy_df, ext_df)
 
     # Compute regime labels (backward-looking)
-    log_ret_20d = np.log(features_df["close"] / features_df["close"].shift(20))
-    vol_20d = features_df["close"].pct_change().rolling(20).std()
-    vol_median = vol_20d.rolling(252).median()
-
-    regime_vals = []
-    for i in range(len(features_df)):
-        lr = log_ret_20d.iloc[i]
-        vol = vol_20d.iloc[i]
-        vm = vol_median.iloc[i]
-        if pd.isna(lr) or pd.isna(vol) or pd.isna(vm):
-            regime_vals.append(np.nan)
-        else:
-            regime_vals.append(detect_regime(lr, vol, vm))
-
-    regime_map = {Regime.BEAR: 0, Regime.CHOPPY: 1, Regime.BULL: 2}
-    features_df["regime_label"] = pd.Series(regime_vals, index=features_df.index).map(regime_map)
+    features_df["regime_label"] = compute_regime_labels(features_df)
 
     # 20-day forward return labels
     forward_return = features_df["close"].shift(-20) / features_df["close"] - 1

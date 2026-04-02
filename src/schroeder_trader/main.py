@@ -20,6 +20,8 @@ from schroeder_trader.config import (
     TICKER,
     TRAILING_STOP_PCT,
     TRAILING_STOP_COOLDOWN_DAYS,
+    XGB_THRESHOLD_LOW,
+    XGB_THRESHOLD_HIGH,
 )
 from schroeder_trader.risk.kelly import kelly_fraction as compute_kelly_fraction, kelly_qty as compute_kelly_qty
 from schroeder_trader.risk.trailing_stop import TrailingStop
@@ -27,7 +29,7 @@ from schroeder_trader.logging_config import setup_logging
 from schroeder_trader.data.market_data import fetch_daily_bars, is_market_open_today
 from schroeder_trader.strategy.sma_crossover import Signal, generate_signal
 from schroeder_trader.strategy.composite import composite_signal_hybrid, count_consecutive_bear_days
-from schroeder_trader.strategy.regime_detector import Regime, detect_regime
+from schroeder_trader.strategy.regime_detector import Regime, compute_regime_labels, compute_regime_series
 from schroeder_trader.risk.risk_manager import evaluate
 from schroeder_trader.execution.broker import (
     submit_order,
@@ -221,23 +223,8 @@ def _run_pipeline_inner(conn) -> None:
 
             if len(features) > 0:
                 # Compute regime labels (backward-looking)
-                log_ret_20d = np.log(features["close"] / features["close"].shift(20))
-                vol_20d = features["close"].pct_change().rolling(20).std()
-                vol_med = vol_20d.rolling(252).median()
-
-                regime_series = pd.Series(index=features.index, dtype=object)
-                for idx in range(len(features)):
-                    lr = log_ret_20d.iloc[idx]
-                    vol = vol_20d.iloc[idx]
-                    vm = vol_med.iloc[idx]
-                    if pd.isna(lr) or pd.isna(vol) or pd.isna(vm):
-                        regime_series.iloc[idx] = np.nan
-                    else:
-                        regime_series.iloc[idx] = detect_regime(lr, vol, vm)
-
-                # Add regime_label as integer feature
-                regime_map = {Regime.BEAR: 0, Regime.CHOPPY: 1, Regime.BULL: 2}
-                features["regime_label"] = regime_series.map(regime_map)
+                regime_series = compute_regime_series(features)
+                features["regime_label"] = compute_regime_labels(features)
 
                 # Today's data
                 today_regime = regime_series.iloc[-1]
@@ -264,18 +251,18 @@ def _run_pipeline_inner(conn) -> None:
                         "UP": float(proba[idx_up]),
                     }
 
-                    # Low threshold (0.35) for Choppy
-                    if pred_class == idx_up and proba[idx_up] > 0.35:
+                    # Low threshold for Choppy regime
+                    if pred_class == idx_up and proba[idx_up] > XGB_THRESHOLD_LOW:
                         xgb_low = Signal.BUY
-                    elif pred_class == idx_down and proba[idx_down] > 0.35:
+                    elif pred_class == idx_down and proba[idx_down] > XGB_THRESHOLD_LOW:
                         xgb_low = Signal.SELL
                     else:
                         xgb_low = Signal.HOLD
 
-                    # High threshold (0.50) for late Bear
-                    if pred_class == idx_up and proba[idx_up] > 0.50:
+                    # High threshold for late Bear regime
+                    if pred_class == idx_up and proba[idx_up] > XGB_THRESHOLD_HIGH:
                         xgb_high = Signal.BUY
-                    elif pred_class == idx_down and proba[idx_down] > 0.50:
+                    elif pred_class == idx_down and proba[idx_down] > XGB_THRESHOLD_HIGH:
                         xgb_high = Signal.SELL
                     else:
                         xgb_high = Signal.HOLD
