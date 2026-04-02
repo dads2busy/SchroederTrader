@@ -27,7 +27,7 @@ def kelly_fraction(
 
     kelly_pct = (p_up * win_loss_ratio - p_down) / win_loss_ratio
     fractional = kelly_pct * kelly_multiplier
-    return min(1.0, max(0.0, fractional))
+    return float(min(1.0, max(0.0, fractional)))
 
 
 def kelly_qty(
