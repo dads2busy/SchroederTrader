@@ -57,8 +57,13 @@ def test_get_order_status_filled(mock_client):
 
 @patch("schroeder_trader.execution.broker._get_trading_client")
 def test_get_position_none(mock_client):
+    from alpaca.common.exceptions import APIError
+    from requests import HTTPError, Response
     client = MagicMock()
-    client.get_open_position.side_effect = Exception("position does not exist")
+    resp = Response()
+    resp.status_code = 404
+    err = APIError("position does not exist", http_error=HTTPError(response=resp))
+    client.get_open_position.side_effect = err
     mock_client.return_value = client
 
     qty = get_position("SPY")

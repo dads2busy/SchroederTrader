@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from alpaca.common.exceptions import APIError
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
 from alpaca.trading.requests import MarketOrderRequest
@@ -71,8 +72,10 @@ def get_position(ticker: str) -> int:
     try:
         position = client.get_open_position(ticker)
         return int(position.qty)
-    except Exception:
-        return 0
+    except APIError as e:
+        if e.status_code == 404:
+            return 0  # no position held
+        raise
 
 
 def get_account() -> dict:
