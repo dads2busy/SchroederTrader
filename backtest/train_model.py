@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, classification_report
 
-from schroeder_trader.config import SMA_SHORT_WINDOW, SMA_LONG_WINDOW, SLIPPAGE_ESTIMATE
+from schroeder_trader.config import SMA_SHORT_WINDOW, SMA_LONG_WINDOW
+from schroeder_trader.risk.transaction_cost import estimate_slippage
 from schroeder_trader.strategy.feature_engineer import (
     FeaturePipeline,
     CLASS_DOWN,
@@ -54,6 +55,8 @@ def load_data() -> pd.DataFrame:
 def walk_forward_evaluate() -> dict:
     """Run walk-forward validation and return aggregate metrics."""
     df = load_data()
+    features_csv = DATA_DIR / "features_daily.csv"
+    vix_df = pd.read_csv(str(features_csv), index_col="date", parse_dates=True)["vix_close"]
     pipeline = FeaturePipeline()
     features_df = pipeline.compute_features_with_labels(df)
 
@@ -138,7 +141,9 @@ def walk_forward_evaluate() -> dict:
         strategy_return = position * ret
         if i > 0 and ((pred == CLASS_UP and all_predictions[i-1] != CLASS_UP) or
                        (pred == CLASS_DOWN and all_predictions[i-1] != CLASS_DOWN)):
-            strategy_return -= SLIPPAGE_ESTIMATE
+            trade_date = all_dates[i]
+            vix_val = vix_df.get(trade_date, 20.0)
+            strategy_return -= estimate_slippage(vix_val)
 
         strategy_returns.append(strategy_return)
 
