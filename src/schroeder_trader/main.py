@@ -177,15 +177,8 @@ def _run_pipeline_inner(conn) -> None:
     position_value = position_qty * close_price
     log_portfolio(conn, now, account["cash"], position_qty, position_value, account["portfolio_value"])
 
-    # Step 9: Daily summary
-    send_daily_summary(
-        portfolio_value=account["portfolio_value"],
-        cash=account["cash"],
-        position_qty=position_qty,
-        signal=signal.value,
-        sma_50=sma_50,
-        sma_200=sma_200,
-    )
+    # Step 9: Daily summary (sent after Step 11 with LLM report if available)
+    llm_report = None
 
     # Step 10: Composite shadow signal
     try:
@@ -318,20 +311,21 @@ def _run_pipeline_inner(conn) -> None:
     try:
         recent = get_shadow_signals(conn)[-10:]
         if recent:
-            account = get_account()
-            report = generate_daily_report(recent[-1], recent, account)
-            send_daily_summary(
-                portfolio_value=account["portfolio_value"],
-                cash=account["cash"],
-                position_qty=get_position(TICKER),
-                signal=signal.value,
-                sma_50=sma_50,
-                sma_200=sma_200,
-                llm_report=report,
-            )
-            logger.info("LLM daily report sent")
+            llm_report = generate_daily_report(recent[-1], recent, account)
+            logger.info("LLM daily report generated")
     except Exception:
         logger.exception("LLM report generation failed (non-fatal)")
+
+    # Send daily summary (with LLM report if available, plain otherwise)
+    send_daily_summary(
+        portfolio_value=account["portfolio_value"],
+        cash=account["cash"],
+        position_qty=position_qty,
+        signal=signal.value,
+        sma_50=sma_50,
+        sma_200=sma_200,
+        llm_report=llm_report,
+    )
 
     logger.info("Pipeline complete")
 
