@@ -5,18 +5,6 @@ from schroeder_trader.strategy.regime_detector import Regime
 from schroeder_trader.strategy.sma_crossover import Signal
 
 
-def composite_signal(
-    regime: Regime,
-    sma_signal: Signal,
-    xgb_signal: Signal,
-) -> Signal:
-    """Route to the appropriate strategy based on regime (Phase 3 simple version)."""
-    if regime in (Regime.BULL, Regime.BEAR):
-        return sma_signal
-    else:
-        return xgb_signal
-
-
 def composite_signal_hybrid(
     regime: Regime,
     sma_signal: Signal,

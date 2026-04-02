@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 
 from schroeder_trader.strategy.composite import (
-    composite_signal,
     composite_signal_hybrid,
     count_consecutive_bear_days,
 )
