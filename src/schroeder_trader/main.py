@@ -45,6 +45,7 @@ from schroeder_trader.storage.trade_log import (
     get_pending_orders,
     update_order_fill,
     log_shadow_signal,
+    get_shadow_signals,
 )
 from schroeder_trader.strategy.feature_engineer import FeaturePipeline
 from schroeder_trader.strategy.xgboost_classifier import load_model
@@ -54,6 +55,7 @@ from schroeder_trader.alerts.email_alert import (
     send_error_alert,
     send_daily_summary,
 )
+from schroeder_trader.agents.daily_report import generate_daily_report
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +313,25 @@ def _run_pipeline_inner(conn) -> None:
                     )
     except Exception:
         logger.exception("Shadow composite prediction failed (non-fatal)")
+
+    # Step 11: LLM daily intelligence report (non-fatal)
+    try:
+        recent = get_shadow_signals(conn)[-10:]
+        if recent:
+            account = get_account()
+            report = generate_daily_report(recent[-1], recent, account)
+            send_daily_summary(
+                portfolio_value=account["portfolio_value"],
+                cash=account["cash"],
+                position_qty=get_position(TICKER),
+                signal=signal.value,
+                sma_50=sma_50,
+                sma_200=sma_200,
+                llm_report=report,
+            )
+            logger.info("LLM daily report sent")
+    except Exception:
+        logger.exception("LLM report generation failed (non-fatal)")
 
     logger.info("Pipeline complete")
 
