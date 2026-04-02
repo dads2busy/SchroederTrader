@@ -5,19 +5,20 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from schroeder_trader.config import DB_PATH, SLIPPAGE_ESTIMATE
+from schroeder_trader.config import DB_PATH
+from schroeder_trader.risk.transaction_cost import estimate_slippage
 from schroeder_trader.storage.trade_log import init_db, get_shadow_signals
 
 OUTPUT_DIR = Path(__file__).parent / "results"
 
 
-def _simulate_strategy(signals: np.ndarray, daily_returns: np.ndarray) -> dict:
+def _simulate_strategy(signals: np.ndarray, daily_returns: np.ndarray, vix_values: np.ndarray) -> dict:
     """Simulate a long/flat strategy and return performance metrics."""
     position = 0
     prev_position = 0
     strat_returns = []
 
-    for sig, ret in zip(signals, daily_returns):
+    for i, (sig, ret) in enumerate(zip(signals, daily_returns)):
         if sig == "BUY":
             position = 1
         elif sig == "SELL":
@@ -25,7 +26,8 @@ def _simulate_strategy(signals: np.ndarray, daily_returns: np.ndarray) -> dict:
 
         strat_ret = position * ret
         if position != prev_position:
-            strat_ret -= SLIPPAGE_ESTIMATE
+            vix = vix_values[i] if i < len(vix_values) else 20.0
+            strat_ret -= estimate_slippage(vix)
         prev_position = position
         strat_returns.append(strat_ret)
 
@@ -97,9 +99,16 @@ def compare() -> None:
     close_prices = merged["close_price_ml"].values
     daily_returns = np.diff(close_prices) / close_prices[:-1]
 
+    features_csv = Path(__file__).parent / "data" / "features_daily.csv"
+    if features_csv.exists():
+        vix_full = pd.read_csv(str(features_csv), index_col="date", parse_dates=True)["vix_close"]
+        vix_values = merged["date"].apply(lambda d: vix_full.get(pd.Timestamp(d), 20.0)).values
+    else:
+        vix_values = np.full(len(merged), 20.0)
+
     comparison = {}
     for name, signal_col in [("sma", "signal"), ("ml", "ml_signal")]:
-        metrics = _simulate_strategy(merged[signal_col].values[:-1], daily_returns)
+        metrics = _simulate_strategy(merged[signal_col].values[:-1], daily_returns, vix_values[:-1])
         comparison[name] = metrics
 
         print(f"\n{name.upper()} Strategy:")
