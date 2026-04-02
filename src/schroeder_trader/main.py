@@ -286,13 +286,16 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
                     k_qty = compute_kelly_qty(k_frac, account["portfolio_value"], close_price)
 
                     # Evaluate trailing stop
-                    ts_triggered = trailing_stop.update(account["portfolio_value"], now.date())
                     ts_trading_dates = [
                         datetime.fromisoformat(r["timestamp"]).date()
                         for r in conn.execute(
                             "SELECT timestamp FROM shadow_signals ORDER BY id"
                         ).fetchall()
                     ]
+                    ts_triggered = trailing_stop.update(
+                        account["portfolio_value"], now.date(),
+                        trading_dates=ts_trading_dates,
+                    )
                     ts_in_cooldown = trailing_stop.in_cooldown(now.date(), ts_trading_dates)
 
                     # Log shadow signal (always log XGB prediction for analysis)

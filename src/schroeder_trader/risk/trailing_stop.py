@@ -24,16 +24,29 @@ class TrailingStop:
         self.high_water_mark = high_water_mark
         self.stop_date = stop_date
 
-    def update(self, portfolio_value: float, current_date: date) -> bool:
+    def update(
+        self, portfolio_value: float, current_date: date,
+        trading_dates: list[date] | None = None,
+    ) -> bool:
         """Update high-water mark and check for stop trigger.
+
+        Args:
+            portfolio_value: Current portfolio value.
+            current_date: Today's date.
+            trading_dates: List of past trading dates, needed to check
+                cooldown expiry. If None and a stop was previously
+                triggered, the stop state is preserved (safe default).
 
         Returns True if the stop is triggered on this update.
         """
-        # If we previously triggered and cooldown has expired, reset
-        if self.stop_date is not None and self.high_water_mark > 0:
-            # Reset HWM so it starts fresh from current value
-            self.high_water_mark = 0.0
-            self.stop_date = None
+        # If previously triggered, only reset after cooldown expires
+        if self.stop_date is not None:
+            if trading_dates is not None and not self.in_cooldown(current_date, trading_dates):
+                self.high_water_mark = 0.0
+                self.stop_date = None
+            else:
+                # Still in cooldown (or can't verify) — don't update HWM
+                return False
 
         self.high_water_mark = max(self.high_water_mark, portfolio_value)
 

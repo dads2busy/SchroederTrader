@@ -94,10 +94,36 @@ def test_hwm_resets_after_cooldown():
     ]
     # Cooldown expired
     assert ts.in_cooldown(date(2026, 1, 13), trading_dates) is False
-    # Next update should reset HWM to current value
-    ts.update(93000.0, date(2026, 1, 13))
+    # Next update with trading_dates should reset HWM to current value
+    ts.update(93000.0, date(2026, 1, 13), trading_dates=trading_dates)
     assert ts.high_water_mark == 93000.0
     assert ts.stop_date is None
+
+
+def test_update_during_cooldown_preserves_state():
+    """Calling update() during cooldown does NOT reset state."""
+    ts = TrailingStop(drawdown_pct=0.08, cooldown_days=5)
+    ts.update(100000.0, date(2026, 1, 2))
+    ts.update(91000.0, date(2026, 1, 3))  # trigger
+    trading_dates = [
+        date(2026, 1, 3), date(2026, 1, 6), date(2026, 1, 7),
+    ]
+    # Day 2 of cooldown — update should return False and preserve stop_date
+    result = ts.update(95000.0, date(2026, 1, 6), trading_dates=trading_dates)
+    assert result is False
+    assert ts.stop_date == date(2026, 1, 3)  # preserved, not cleared
+    assert ts.high_water_mark == 100000.0  # preserved, not reset
+
+
+def test_update_without_trading_dates_preserves_state():
+    """Calling update() without trading_dates after trigger is safe (no reset)."""
+    ts = TrailingStop(drawdown_pct=0.08, cooldown_days=5)
+    ts.update(100000.0, date(2026, 1, 2))
+    ts.update(91000.0, date(2026, 1, 3))  # trigger
+    # No trading_dates — should preserve state (safe default)
+    result = ts.update(95000.0, date(2026, 1, 6))
+    assert result is False
+    assert ts.stop_date == date(2026, 1, 3)
 
 
 def test_init_with_existing_state():
