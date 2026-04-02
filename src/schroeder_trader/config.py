@@ -22,6 +22,8 @@ CASH_BUFFER_PCT = 0.02
 SLIPPAGE_ESTIMATE = 0.0005
 KELLY_MULTIPLIER = 0.5           # half-Kelly default (configurable)
 KELLY_WIN_LOSS_RATIO = 0.88      # derived from walk-forward backtest
+TRAILING_STOP_PCT = 0.08            # 8% portfolio drawdown triggers stop
+TRAILING_STOP_COOLDOWN_DAYS = 5     # trading days before re-entry allowed
 
 # Alpaca
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
