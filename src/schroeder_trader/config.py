@@ -19,7 +19,6 @@ TICKER = "SPY"
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
 CASH_BUFFER_PCT = 0.02
-SLIPPAGE_ESTIMATE = 0.0005
 KELLY_MULTIPLIER = 0.5           # half-Kelly default (configurable)
 KELLY_WIN_LOSS_RATIO = 0.88      # derived from walk-forward backtest
 TRAILING_STOP_PCT = 0.08            # 8% portfolio drawdown triggers stop
