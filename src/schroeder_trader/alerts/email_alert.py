@@ -88,16 +88,28 @@ def send_daily_summary(
     signal: str,
     sma_50: float,
     sma_200: float,
+    llm_report: str | None = None,
 ) -> None:
-    subject = f"[SchroederTrader] Daily run complete - Portfolio: ${portfolio_value:,.0f}"
-    body = (
-        f"Daily Summary\n"
-        f"{'=' * 40}\n"
-        f"Signal: {signal}\n"
-        f"Portfolio Value: ${portfolio_value:,.2f}\n"
-        f"Cash: ${cash:,.2f}\n"
-        f"Position: {position_qty} shares SPY\n\n"
-        f"SMA 50: {sma_50:.2f}\n"
-        f"SMA 200: {sma_200:.2f}\n"
-    )
+    if llm_report:
+        subject = f"[SchroederTrader] Daily Report — Portfolio: ${portfolio_value:,.0f}"
+        body = (
+            f"{llm_report}\n\n"
+            f"{'—' * 40}\n"
+            f"Raw Data:\n"
+            f"Signal: {signal} | Portfolio: ${portfolio_value:,.2f}\n"
+            f"Cash: ${cash:,.2f} | Position: {position_qty} shares SPY\n"
+            f"SMA 50: {sma_50:.2f} | SMA 200: {sma_200:.2f}\n"
+        )
+    else:
+        subject = f"[SchroederTrader] Daily run complete - Portfolio: ${portfolio_value:,.0f}"
+        body = (
+            f"Daily Summary\n"
+            f"{'=' * 40}\n"
+            f"Signal: {signal}\n"
+            f"Portfolio Value: ${portfolio_value:,.2f}\n"
+            f"Cash: ${cash:,.2f}\n"
+            f"Position: {position_qty} shares SPY\n\n"
+            f"SMA 50: {sma_50:.2f}\n"
+            f"SMA 200: {sma_200:.2f}\n"
+        )
     _send_email(subject, body)
