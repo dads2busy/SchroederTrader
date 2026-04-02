@@ -24,15 +24,9 @@ YF_TICKERS = {
     "uup_close": "UUP",
     "tlt_close": "TLT",
     "eem_close": "EEM",
+    "dgs10": "^TNX",
+    "dgs2": "2YY=F",
 }
-
-# FRED series (public CSV endpoint, no API key needed)
-FRED_SERIES = {
-    "dgs10": "DGS10",
-    "dgs2": "DGS2",
-}
-
-FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}&cosd={start}&coed={end}"
 
 
 def download_yfinance(start: str, end: str) -> pd.DataFrame:
@@ -49,21 +43,6 @@ def download_yfinance(start: str, end: str) -> pd.DataFrame:
             data.columns = data.columns.get_level_values(0)
         frames[col_name] = data["Close"].rename(col_name)
         time.sleep(0.5)  # rate limit
-
-    return pd.concat(frames.values(), axis=1).sort_index()
-
-
-def download_fred(start: str, end: str) -> pd.DataFrame:
-    """Download yield data from FRED public CSV endpoint."""
-    frames = {}
-    for col_name, series in FRED_SERIES.items():
-        url = FRED_URL.format(series=series, start=start, end=end)
-        print(f"  Downloading FRED {series}...")
-        df = pd.read_csv(url, parse_dates=["observation_date"], index_col="observation_date", na_values=".")
-        df.columns = [col_name]
-        # Forward-fill gaps (max 5 business days)
-        df = df.ffill(limit=5)
-        frames[col_name] = df[col_name]
 
     return pd.concat(frames.values(), axis=1).sort_index()
 
@@ -100,13 +79,7 @@ def download_all(start: str = "1993-01-01", end: str | None = None, force: bool 
         end = datetime.now().strftime("%Y-%m-%d")
 
     print("Downloading yfinance data...")
-    yf_data = download_yfinance(start, end)
-
-    print("Downloading FRED data...")
-    fred_data = download_fred(start, end)
-
-    # Merge on date (inner join — only keep days where all sources have data)
-    combined = yf_data.join(fred_data, how="inner")
+    combined = download_yfinance(start, end)
 
     # Compute derived features for the composite model
     combined = compute_derived_features(combined)
