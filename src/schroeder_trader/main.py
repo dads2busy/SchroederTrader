@@ -17,8 +17,11 @@ from schroeder_trader.config import (
     KELLY_WIN_LOSS_RATIO,
     PROJECT_ROOT,
     TICKER,
+    TRAILING_STOP_PCT,
+    TRAILING_STOP_COOLDOWN_DAYS,
 )
 from schroeder_trader.risk.kelly import kelly_fraction as compute_kelly_fraction, kelly_qty as compute_kelly_qty
+from schroeder_trader.risk.trailing_stop import TrailingStop
 from schroeder_trader.logging_config import setup_logging
 from schroeder_trader.data.market_data import fetch_daily_bars, is_market_open_today
 from schroeder_trader.strategy.sma_crossover import Signal, generate_signal
@@ -58,6 +61,25 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
     conn = init_db(db_path)
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
+
+    # Initialize trailing stop from DB state
+    ts_row = conn.execute(
+        "SELECT high_water_mark, trailing_stop_triggered, timestamp FROM shadow_signals "
+        "WHERE high_water_mark IS NOT NULL ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if ts_row and ts_row["trailing_stop_triggered"]:
+        stop_date = datetime.fromisoformat(ts_row["timestamp"]).date()
+        trailing_stop = TrailingStop(
+            TRAILING_STOP_PCT, TRAILING_STOP_COOLDOWN_DAYS,
+            high_water_mark=ts_row["high_water_mark"], stop_date=stop_date,
+        )
+    elif ts_row:
+        trailing_stop = TrailingStop(
+            TRAILING_STOP_PCT, TRAILING_STOP_COOLDOWN_DAYS,
+            high_water_mark=ts_row["high_water_mark"],
+        )
+    else:
+        trailing_stop = TrailingStop(TRAILING_STOP_PCT, TRAILING_STOP_COOLDOWN_DAYS)
 
     # Step 1: Idempotency check
     existing = get_signal_by_date(conn, today)
@@ -263,6 +285,16 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
                     )
                     k_qty = compute_kelly_qty(k_frac, account["portfolio_value"], close_price)
 
+                    # Evaluate trailing stop
+                    ts_triggered = trailing_stop.update(account["portfolio_value"], now.date())
+                    ts_trading_dates = [
+                        datetime.fromisoformat(r["timestamp"]).date()
+                        for r in conn.execute(
+                            "SELECT timestamp FROM shadow_signals ORDER BY id"
+                        ).fetchall()
+                    ]
+                    ts_in_cooldown = trailing_stop.in_cooldown(now.date(), ts_trading_dates)
+
                     # Log shadow signal (always log XGB prediction for analysis)
                     log_shadow_signal(
                         conn, now, TICKER, close_price,
@@ -275,11 +307,14 @@ def run_pipeline(db_path: Path = DB_PATH) -> None:
                         bear_day_count=bear_days if today_regime == Regime.BEAR else None,
                         kelly_fraction=k_frac,
                         kelly_qty=k_qty,
+                        high_water_mark=trailing_stop.high_water_mark,
+                        trailing_stop_triggered=ts_triggered or ts_in_cooldown,
                     )
                     logger.info(
-                        "Shadow composite: %s (source=%s, regime=%s, bear_days=%d, kelly=%.3f, kelly_qty=%d)",
+                        "Shadow composite: %s (source=%s, regime=%s, bear_days=%d, kelly=%.3f, kelly_qty=%d, hwm=%.0f, ts_stop=%s)",
                         composite_sig.value, source, today_regime.value, bear_days,
                         k_frac or 0.0, k_qty or 0,
+                        trailing_stop.high_water_mark, ts_triggered or ts_in_cooldown,
                     )
     except Exception:
         logger.exception("Shadow composite prediction failed (non-fatal)")
