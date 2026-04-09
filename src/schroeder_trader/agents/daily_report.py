@@ -85,7 +85,7 @@ def generate_daily_report(
     """Generate a natural-language daily briefing using Claude."""
     prompt = _build_prompt(today_signal, recent_signals, portfolio)
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=60.0)
     response = client.messages.create(
         model=LLM_MODEL,
         max_tokens=300,

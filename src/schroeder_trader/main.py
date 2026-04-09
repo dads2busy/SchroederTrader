@@ -184,16 +184,21 @@ def _run_pipeline_inner(conn) -> None:
     try:
         # Fetch/update external features (idempotent, skips if <24h old)
         try:
+            logger.info("Downloading external features...")
             result = subprocess.run(
                 [sys.executable, str(PROJECT_ROOT / "backtest" / "download_features.py")],
                 cwd=str(PROJECT_ROOT), capture_output=True, timeout=120,
             )
             if result.returncode != 0:
-                logger.warning("External feature download failed (rc=%d), using cached data", result.returncode)
+                stderr_snippet = (result.stderr or b"").decode(errors="replace")[-200:]
+                logger.warning("External feature download failed (rc=%d): %s", result.returncode, stderr_snippet)
+        except subprocess.TimeoutExpired:
+            logger.warning("External feature download timed out after 120s, using cached data")
         except Exception:
-            logger.warning("External feature download failed, using cached data")
+            logger.warning("External feature download failed, using cached data", exc_info=True)
 
         # Load composite model
+        logger.info("Loading composite model...")
         model = load_model(COMPOSITE_MODEL_PATH)
         if model is None:
             logger.info("No composite model at %s, skipping shadow step", COMPOSITE_MODEL_PATH)
@@ -208,14 +213,17 @@ def _run_pipeline_inner(conn) -> None:
 
             # Load external features
             ext_df = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
+            logger.info("External features loaded: %d rows, last date %s", len(ext_df), ext_df.index[-1])
 
             # Fetch 600 days of SPY data for feature + regime warmup
             # (regime needs 252-day rolling median + 20-day vol window)
             shadow_df = fetch_daily_bars(TICKER, days=600)
+            logger.info("Shadow bars fetched: %d rows, last date %s", len(shadow_df), shadow_df.index[-1])
 
             # Compute extended features
             pipeline = FeaturePipeline()
             features = pipeline.compute_features_extended(shadow_df, ext_df)
+            logger.info("Extended features computed: %d rows", len(features))
 
             if len(features) > 0:
                 # Compute regime labels (backward-looking)
@@ -229,6 +237,12 @@ def _run_pipeline_inner(conn) -> None:
 
                 bear_days = count_consecutive_bear_days(regime_series)
 
+                # Bear weakening: positive 5-day return while in BEAR
+                bear_weakening = False
+                if today_regime == Regime.BEAR and "log_return_5d" in features.columns:
+                    lr5 = features["log_return_5d"].iloc[-1]
+                    bear_weakening = not pd.isna(lr5) and lr5 > 0
+
                 # XGBoost signals at both thresholds
                 feature_cols = [
                     "log_return_5d", "log_return_20d", "volatility_20d",
@@ -237,7 +251,8 @@ def _run_pipeline_inner(conn) -> None:
                 last_row = features[feature_cols].iloc[[-1]]
 
                 if last_row.isna().any().any():
-                    logger.warning("NaN in feature row, skipping shadow signal")
+                    nan_cols = [c for c in feature_cols if last_row[c].isna().any()]
+                    logger.warning("NaN in feature row (columns: %s), skipping shadow signal", nan_cols)
                 else:
                     proba = model.predict_proba(last_row)[0]
                     pred_class = int(np.argmax(proba))
@@ -258,6 +273,7 @@ def _run_pipeline_inner(conn) -> None:
                     # Route composite signal
                     composite_sig, source = composite_signal_hybrid(
                         today_regime, signal, xgb_low,
+                        bear_weakening=bear_weakening,
                     )
 
                     # Always compute Kelly sizing for analysis
@@ -306,6 +322,10 @@ def _run_pipeline_inner(conn) -> None:
                     )
     except Exception:
         logger.exception("Shadow composite prediction failed (non-fatal)")
+        try:
+            send_error_alert("Shadow signal failed", traceback.format_exc()[-500:])
+        except Exception:
+            logger.exception("Failed to send shadow failure alert")
 
     # Step 11: LLM daily intelligence report (non-fatal)
     try:
@@ -315,6 +335,10 @@ def _run_pipeline_inner(conn) -> None:
             logger.info("LLM daily report generated")
     except Exception:
         logger.exception("LLM report generation failed (non-fatal)")
+        try:
+            send_error_alert("LLM report failed", traceback.format_exc()[-500:])
+        except Exception:
+            logger.exception("Failed to send LLM failure alert")
 
     # Send daily summary (with LLM report if available, plain otherwise)
     send_daily_summary(

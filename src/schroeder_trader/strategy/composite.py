@@ -9,20 +9,25 @@ def composite_signal_hybrid(
     regime: Regime,
     sma_signal: Signal,
     xgb_signal_low: Signal,
+    bear_weakening: bool = False,
 ) -> tuple[Signal, str]:
     """Route signal based on regime.
 
     Routing:
         BULL → SMA crossover signal
         CHOPPY → XGB at low confidence threshold
-        BEAR → always SELL (stay flat)
+        BEAR → SELL (stay flat), unless bear is weakening (positive
+               5-day return) in which case route to XGB
 
     Returns:
-        Tuple of (Signal, source) where source is "SMA", "FLAT", or "XGB".
+        Tuple of (Signal, source) where source is "SMA", "FLAT",
+        "XGB", or "XGB_BEAR_WEAK".
     """
     if regime == Regime.BULL:
         return sma_signal, "SMA"
     elif regime == Regime.BEAR:
+        if bear_weakening:
+            return xgb_signal_low, "XGB_BEAR_WEAK"
         return Signal.SELL, "FLAT"
     else:
         return xgb_signal_low, "XGB"

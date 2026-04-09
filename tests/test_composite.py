@@ -15,23 +15,37 @@ def test_hybrid_bull_routes_to_sma():
     assert source == "SMA"
 
 
-def test_hybrid_bear_always_flat():
+def test_hybrid_bear_flat_by_default():
     signal, source = composite_signal_hybrid(Regime.BEAR, Signal.BUY, Signal.BUY)
     assert signal == Signal.SELL
     assert source == "FLAT"
 
 
-def test_hybrid_bear_day_1_flat():
-    signal, source = composite_signal_hybrid(Regime.BEAR, Signal.HOLD, Signal.BUY)
+def test_hybrid_bear_flat_when_not_weakening():
+    signal, source = composite_signal_hybrid(Regime.BEAR, Signal.HOLD, Signal.BUY, bear_weakening=False)
     assert signal == Signal.SELL
     assert source == "FLAT"
 
 
-def test_hybrid_bear_day_100_still_flat():
-    """BEAR is always flat regardless of duration."""
-    signal, source = composite_signal_hybrid(Regime.BEAR, Signal.HOLD, Signal.BUY)
+def test_hybrid_bear_weakening_routes_to_xgb():
+    """When bear is weakening (positive 5d return), route to XGB."""
+    signal, source = composite_signal_hybrid(Regime.BEAR, Signal.HOLD, Signal.BUY, bear_weakening=True)
+    assert signal == Signal.BUY
+    assert source == "XGB_BEAR_WEAK"
+
+
+def test_hybrid_bear_weakening_sell_signal():
+    """Bear weakening still passes through XGB SELL signals."""
+    signal, source = composite_signal_hybrid(Regime.BEAR, Signal.HOLD, Signal.SELL, bear_weakening=True)
     assert signal == Signal.SELL
-    assert source == "FLAT"
+    assert source == "XGB_BEAR_WEAK"
+
+
+def test_hybrid_bear_weakening_hold_signal():
+    """Bear weakening with XGB HOLD stays out."""
+    signal, source = composite_signal_hybrid(Regime.BEAR, Signal.HOLD, Signal.HOLD, bear_weakening=True)
+    assert signal == Signal.HOLD
+    assert source == "XGB_BEAR_WEAK"
 
 
 def test_hybrid_choppy_routes_to_xgb_low():

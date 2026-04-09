@@ -153,8 +153,16 @@ def run():
             close_up_to = close.iloc[:hist_end + 1]
             sma_signal = _sma_signal_for_day(close_up_to)
 
+            # Bear weakening: positive 5-day return while in BEAR
+            bear_weakening = False
+            if regime == Regime.BEAR:
+                lr5 = row.get("log_return_5d")
+                if lr5 is not None and not np.isnan(lr5) and lr5 > 0:
+                    bear_weakening = True
+
             signal, source = composite_signal_hybrid(
                 regime, sma_signal, xgb_low,
+                bear_weakening=bear_weakening,
             )
 
             # p_up and p_down for Kelly
