@@ -15,6 +15,7 @@ from backtest.train_final_composite import (
     TEST_MONTHS,
 )
 from schroeder_trader.risk.kelly import kelly_fraction
+from schroeder_trader.risk.transaction_cost import estimate_slippage
 from schroeder_trader.strategy.composite import composite_signal_hybrid
 from schroeder_trader.strategy.feature_engineer import CLASS_DOWN, CLASS_UP
 from schroeder_trader.strategy.regime_detector import Regime
@@ -219,6 +220,11 @@ def run():
     # Compute daily SPY returns for the test dates
     daily_returns = close.pct_change()
 
+    # Load VIX for slippage estimation
+    ext_path = DATA_DIR / "features_daily.csv"
+    ext_df = pd.read_csv(ext_path, index_col="date", parse_dates=True)
+    vix = ext_df["vix_close"].reindex(features_df.index).ffill()
+
     # Binary and Kelly portfolio simulation
     binary_value = INITIAL_CAPITAL
     kelly_value = INITIAL_CAPITAL
@@ -239,7 +245,15 @@ def run():
         if np.isnan(daily_ret):
             daily_ret = 0.0
 
+        v = vix.get(dt, 20.0)
+        if np.isnan(v):
+            v = 20.0
+        slippage = estimate_slippage(v)
+
         # ── Update positions based on signal ──
+        prev_binary = binary_invested_frac
+        prev_kelly = kelly_invested_frac
+
         # Binary strategy
         if sig == Signal.BUY:
             binary_invested_frac = 1.0 - CASH_BUFFER
@@ -258,6 +272,12 @@ def run():
         elif sig == Signal.SELL:
             kelly_invested_frac = 0.0
         # HOLD: maintain current position
+
+        # ── Apply transaction costs on position changes ──
+        if prev_binary != binary_invested_frac:
+            binary_value -= binary_value * abs(binary_invested_frac - prev_binary) * slippage
+        if prev_kelly != kelly_invested_frac:
+            kelly_value -= kelly_value * abs(kelly_invested_frac - prev_kelly) * slippage
 
         # ── Mark to market ──
         binary_value *= (1.0 + binary_invested_frac * daily_ret)

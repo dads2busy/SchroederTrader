@@ -28,6 +28,7 @@ from schroeder_trader.strategy.regime_detector import (
     HMM_FEATURES,
 )
 from schroeder_trader.strategy.sma_crossover import Signal
+from schroeder_trader.risk.transaction_cost import estimate_slippage
 
 CASH_BUFFER = 0.02
 INITIAL = 100_000.0
@@ -97,6 +98,7 @@ def simulate_strategy(
     records: list[dict],
     close: pd.Series,
     strategy: str,
+    vix: pd.Series | None = None,
 ) -> np.ndarray:
     """Simulate one strategy and return array of daily portfolio values.
 
@@ -104,6 +106,7 @@ def simulate_strategy(
         records: List of per-day dicts with signal info.
         close: Full SPY close price series.
         strategy: One of "threshold", "hmm_hard", "hmm_blended".
+        vix: VIX close series for slippage estimation.
 
     Returns:
         np.ndarray of portfolio values (one per record row).
@@ -208,6 +211,14 @@ def simulate_strategy(
                 target = 1.0 - CASH_BUFFER
             else:
                 target = 0.0
+
+        # Apply transaction cost on position changes
+        if vix is not None and invested != target:
+            v = vix.get(dt, 20.0)
+            if pd.isna(v):
+                v = 20.0
+            slippage = estimate_slippage(v)
+            value -= value * abs(target - invested) * slippage
 
         invested = target
 
@@ -397,10 +408,11 @@ def run():
     records = sorted(records, key=lambda r: r["date"])
 
     # ── Simulate three strategies ────────────────────────────────────────────
-    print("\nSimulating strategies...")
-    threshold_vals = simulate_strategy(records, close, "threshold")
-    hmm_hard_vals = simulate_strategy(records, close, "hmm_hard")
-    hmm_blended_vals = simulate_strategy(records, close, "hmm_blended")
+    print("\nSimulating strategies (with VIX-based slippage)...")
+    vix_series = features_df.get("vix_close")
+    threshold_vals = simulate_strategy(records, close, "threshold", vix=vix_series)
+    hmm_hard_vals = simulate_strategy(records, close, "hmm_hard", vix=vix_series)
+    hmm_blended_vals = simulate_strategy(records, close, "hmm_blended", vix=vix_series)
 
     # ── SPY buy-and-hold benchmark ───────────────────────────────────────────
     test_dates = [r["date"] for r in records]
