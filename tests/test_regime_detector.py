@@ -1,9 +1,11 @@
 import numpy as np
 import pandas as pd
 import pytest
+import joblib
 
 from schroeder_trader.strategy.regime_detector import (
     Regime,
+    HMMRegimeDetector,
     compute_regime_labels,
     compute_regime_series,
     detect_regime,
@@ -274,3 +276,90 @@ class TestComputeRegimeLabels:
         result = compute_regime_labels(df)
         non_nan = result.dropna()
         assert set(non_nan.values).issubset({0, 1, 2})
+
+
+# ---------------------------------------------------------------------------
+# HMMRegimeDetector tests
+# ---------------------------------------------------------------------------
+
+class TestHMMRegimeDetector:
+    def _make_feature_df(self, n=500, seed=42):
+        rng = np.random.default_rng(seed)
+        returns = rng.normal(0.0003, 0.01, n)
+        prices = 100.0 * np.exp(np.cumsum(returns))
+        idx = pd.date_range("2020-01-01", periods=n, freq="B")
+        df = pd.DataFrame({"close": prices}, index=idx)
+        df["log_return_20d"] = np.log(df["close"] / df["close"].shift(20))
+        df["volatility_20d"] = df["close"].pct_change().rolling(20).std()
+        df["vix_close"] = 15 + rng.normal(0, 3, n)
+        df["vix_term_structure"] = 0.9 + rng.normal(0, 0.05, n)
+        return df.dropna()
+
+    def test_fit_returns_self(self):
+        df = self._make_feature_df()
+        detector = HMMRegimeDetector()
+        result = detector.fit(df)
+        assert result is detector
+
+    def test_predict_proba_returns_dict(self):
+        df = self._make_feature_df()
+        detector = HMMRegimeDetector().fit(df)
+        probs = detector.predict_proba(df)
+        assert isinstance(probs, list)
+        assert len(probs) == len(df)
+        assert isinstance(probs[0], dict)
+
+    def test_predict_proba_sums_to_one(self):
+        df = self._make_feature_df()
+        detector = HMMRegimeDetector().fit(df)
+        probs = detector.predict_proba(df)
+        for p in probs:
+            assert abs(sum(p.values()) - 1.0) < 1e-6
+
+    def test_predict_proba_keys_are_regime_labels(self):
+        df = self._make_feature_df()
+        detector = HMMRegimeDetector().fit(df)
+        probs = detector.predict_proba(df)
+        for p in probs:
+            assert "BULL" in p
+            assert "BEAR" in p
+
+    def test_predict_proba_single_row(self):
+        df = self._make_feature_df()
+        detector = HMMRegimeDetector().fit(df)
+        probs = detector.predict_proba(df.iloc[[-1]])
+        assert len(probs) == 1
+        assert abs(sum(probs[0].values()) - 1.0) < 1e-6
+
+    def test_dominant_regime_returns_regime_enum(self):
+        df = self._make_feature_df()
+        detector = HMMRegimeDetector().fit(df)
+        probs = detector.predict_proba(df)
+        dominant = detector.dominant_regime(probs[0])
+        assert isinstance(dominant, Regime)
+
+    def test_select_n_states_returns_int(self):
+        df = self._make_feature_df()
+        detector = HMMRegimeDetector()
+        n = detector.select_n_states(df)
+        assert isinstance(n, int)
+        assert 2 <= n <= 4
+
+    def test_save_and_load(self, tmp_path):
+        df = self._make_feature_df()
+        detector = HMMRegimeDetector().fit(df)
+        path = tmp_path / "hmm_test.pkl"
+        detector.save(path)
+        loaded = HMMRegimeDetector.load(path)
+        probs_orig = detector.predict_proba(df.iloc[[-1]])
+        probs_loaded = loaded.predict_proba(df.iloc[[-1]])
+        for key in probs_orig[0]:
+            assert abs(probs_orig[0][key] - probs_loaded[0][key]) < 1e-6
+
+    def test_state_labeling_bear_has_lowest_return(self):
+        df = self._make_feature_df(n=800)
+        detector = HMMRegimeDetector().fit(df)
+        means = detector.state_means_
+        bear_idx = detector.label_to_state_["BEAR"]
+        bull_idx = detector.label_to_state_["BULL"]
+        assert means[bear_idx, 0] < means[bull_idx, 0]
