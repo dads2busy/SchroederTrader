@@ -5,6 +5,7 @@ from schroeder_trader.strategy.composite import (
     composite_signal_blended,
     composite_signal_hybrid,
     count_consecutive_bear_days,
+    stale_cash_override,
 )
 from schroeder_trader.strategy.regime_detector import Regime
 from schroeder_trader.strategy.sma_crossover import Signal
@@ -91,6 +92,27 @@ def test_bear_count_last_nan():
 def test_bear_count_empty():
     regimes = pd.Series([], dtype=object)
     assert count_consecutive_bear_days(regimes) == 0
+
+
+class TestStaleCashOverride:
+    def test_fires_in_bull_sma_above_enough_days(self):
+        assert stale_cash_override(Regime.BULL, sma_50=400, sma_200=380, days_in_cash=7) is True
+
+    def test_does_not_fire_before_threshold(self):
+        assert stale_cash_override(Regime.BULL, sma_50=400, sma_200=380, days_in_cash=6) is False
+
+    def test_does_not_fire_in_bear(self):
+        assert stale_cash_override(Regime.BEAR, sma_50=400, sma_200=380, days_in_cash=10) is False
+
+    def test_does_not_fire_in_choppy(self):
+        assert stale_cash_override(Regime.CHOPPY, sma_50=400, sma_200=380, days_in_cash=10) is False
+
+    def test_does_not_fire_when_sma_below(self):
+        assert stale_cash_override(Regime.BULL, sma_50=370, sma_200=380, days_in_cash=10) is False
+
+    def test_custom_threshold(self):
+        assert stale_cash_override(Regime.BULL, sma_50=400, sma_200=380, days_in_cash=3, stale_cash_threshold=3) is True
+        assert stale_cash_override(Regime.BULL, sma_50=400, sma_200=380, days_in_cash=2, stale_cash_threshold=3) is False
 
 
 class TestCompositeSignalBlended:

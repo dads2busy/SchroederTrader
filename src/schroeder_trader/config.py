@@ -25,6 +25,7 @@ POSITION_SIZING = "binary"       # binary (98% in / 0% out) — regime routing h
 KELLY_MULTIPLIER = 2.0           # retained for shadow log analysis only
 KELLY_WIN_LOSS_RATIO = 0.76      # derived from walk-forward backtest
 XGB_THRESHOLD_LOW = 0.35         # confidence threshold for Choppy regime
+STALE_CASH_DAYS = 7              # re-enter BULL if in cash this many days + SMA50 > SMA200
 TRAILING_STOP_PCT = 0.10            # 10% portfolio drawdown triggers stop
 TRAILING_STOP_COOLDOWN_DAYS = 5     # trading days before re-entry allowed
 

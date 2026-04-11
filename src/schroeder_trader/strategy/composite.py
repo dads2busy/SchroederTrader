@@ -91,6 +91,36 @@ def composite_signal_blended(
     return max(0.0, min(MAX_EXPOSURE, blended))
 
 
+def stale_cash_override(
+    regime: Regime,
+    sma_50: float,
+    sma_200: float,
+    days_in_cash: int,
+    stale_cash_threshold: int = 7,
+) -> bool:
+    """Check if stale-cash override should force re-entry.
+
+    Fires when we've been in cash too long during a BULL regime
+    where SMA50 is already above SMA200 (bullish trend) but no
+    fresh crossover has occurred to generate a BUY signal.
+
+    Args:
+        regime: Current regime.
+        sma_50: Current 50-day SMA value.
+        sma_200: Current 200-day SMA value.
+        days_in_cash: Consecutive trading days with zero exposure.
+        stale_cash_threshold: Minimum days in cash before override fires.
+
+    Returns:
+        True if override should force a BUY.
+    """
+    return (
+        regime == Regime.BULL
+        and sma_50 > sma_200
+        and days_in_cash >= stale_cash_threshold
+    )
+
+
 def count_consecutive_bear_days(regimes: pd.Series) -> int:
     """Count consecutive BEAR days ending at the last row.
 

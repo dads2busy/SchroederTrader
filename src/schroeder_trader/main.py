@@ -20,6 +20,7 @@ from schroeder_trader.config import (
     PROJECT_ROOT,
     TICKER,
     TRAILING_STOP_PCT,
+    STALE_CASH_DAYS,
     TRAILING_STOP_COOLDOWN_DAYS,
     XGB_THRESHOLD_LOW,
 )
@@ -28,7 +29,7 @@ from schroeder_trader.risk.trailing_stop import TrailingStop
 from schroeder_trader.logging_config import setup_logging
 from schroeder_trader.data.market_data import fetch_daily_bars, is_market_open_today
 from schroeder_trader.strategy.sma_crossover import Signal, generate_signal
-from schroeder_trader.strategy.composite import composite_signal_hybrid, composite_signal_blended, count_consecutive_bear_days
+from schroeder_trader.strategy.composite import composite_signal_hybrid, composite_signal_blended, count_consecutive_bear_days, stale_cash_override
 from schroeder_trader.strategy.regime_detector import Regime, HMMRegimeDetector, compute_regime_labels, compute_regime_series
 from schroeder_trader.risk.risk_manager import evaluate
 from schroeder_trader.execution.broker import (
@@ -285,6 +286,24 @@ def _run_pipeline_inner(conn) -> None:
                         today_regime, signal, xgb_low,
                         bear_weakening=bear_weakening,
                     )
+
+                    # Stale cash override: re-enter BULL if in cash too long
+                    recent_shadow = get_shadow_signals(conn)
+                    days_in_cash = 0
+                    for s in reversed(recent_shadow):
+                        if s["ml_signal"] == "SELL" or s["ml_signal"] == "HOLD":
+                            days_in_cash += 1
+                        else:
+                            break
+                    if composite_sig != Signal.BUY and stale_cash_override(
+                        today_regime, sma_50, sma_200, days_in_cash, STALE_CASH_DAYS,
+                    ):
+                        composite_sig = Signal.BUY
+                        source = "STALE_CASH"
+                        logger.info(
+                            "Stale cash override: %d days in cash, regime=%s, SMA50=%.2f > SMA200=%.2f",
+                            days_in_cash, today_regime.value, sma_50, sma_200,
+                        )
 
                     # Always compute Kelly sizing for analysis
                     k_frac = compute_kelly_fraction(
