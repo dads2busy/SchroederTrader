@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from schroeder_trader.strategy.composite import (
+    composite_signal_blended,
     composite_signal_hybrid,
     count_consecutive_bear_days,
 )
@@ -90,3 +91,77 @@ def test_bear_count_last_nan():
 def test_bear_count_empty():
     regimes = pd.Series([], dtype=object)
     assert count_consecutive_bear_days(regimes) == 0
+
+
+class TestCompositeSignalBlended:
+    def test_pure_bull_sma_buy(self):
+        exposure = composite_signal_blended(
+            regime_probs={"BULL": 1.0, "BEAR": 0.0, "CHOPPY": 0.0},
+            sma_signal=Signal.BUY, xgb_signal=Signal.SELL,
+            bear_weakening=False, current_exposure=0.0,
+        )
+        assert abs(exposure - 0.98) < 1e-6
+
+    def test_pure_bear_no_weakening(self):
+        exposure = composite_signal_blended(
+            regime_probs={"BULL": 0.0, "BEAR": 1.0, "CHOPPY": 0.0},
+            sma_signal=Signal.BUY, xgb_signal=Signal.BUY,
+            bear_weakening=False, current_exposure=0.5,
+        )
+        assert abs(exposure - 0.0) < 1e-6
+
+    def test_pure_bear_with_weakening_xgb_buy(self):
+        exposure = composite_signal_blended(
+            regime_probs={"BULL": 0.0, "BEAR": 1.0, "CHOPPY": 0.0},
+            sma_signal=Signal.HOLD, xgb_signal=Signal.BUY,
+            bear_weakening=True, current_exposure=0.0,
+        )
+        assert abs(exposure - 0.98) < 1e-6
+
+    def test_pure_choppy_xgb_buy(self):
+        exposure = composite_signal_blended(
+            regime_probs={"BULL": 0.0, "BEAR": 0.0, "CHOPPY": 1.0},
+            sma_signal=Signal.HOLD, xgb_signal=Signal.BUY,
+            bear_weakening=False, current_exposure=0.0,
+        )
+        assert abs(exposure - 0.98) < 1e-6
+
+    def test_blended_60_bull_40_choppy(self):
+        exposure = composite_signal_blended(
+            regime_probs={"BULL": 0.6, "BEAR": 0.0, "CHOPPY": 0.4},
+            sma_signal=Signal.BUY, xgb_signal=Signal.SELL,
+            bear_weakening=False, current_exposure=0.0,
+        )
+        assert abs(exposure - 0.588) < 1e-6
+
+    def test_hold_uses_current_exposure(self):
+        exposure = composite_signal_blended(
+            regime_probs={"BULL": 1.0, "BEAR": 0.0, "CHOPPY": 0.0},
+            sma_signal=Signal.HOLD, xgb_signal=Signal.HOLD,
+            bear_weakening=False, current_exposure=0.5,
+        )
+        assert abs(exposure - 0.5) < 1e-6
+
+    def test_four_state_choppy_variants(self):
+        exposure = composite_signal_blended(
+            regime_probs={"BULL": 0.0, "BEAR": 0.0, "CHOPPY_0": 0.5, "CHOPPY_1": 0.5},
+            sma_signal=Signal.HOLD, xgb_signal=Signal.BUY,
+            bear_weakening=False, current_exposure=0.0,
+        )
+        assert abs(exposure - 0.98) < 1e-6
+
+    def test_output_clamped_to_098(self):
+        exposure = composite_signal_blended(
+            regime_probs={"BULL": 1.0, "BEAR": 0.0, "CHOPPY": 0.0},
+            sma_signal=Signal.BUY, xgb_signal=Signal.BUY,
+            bear_weakening=False, current_exposure=0.98,
+        )
+        assert exposure <= 0.98
+
+    def test_output_non_negative(self):
+        exposure = composite_signal_blended(
+            regime_probs={"BULL": 0.0, "BEAR": 1.0, "CHOPPY": 0.0},
+            sma_signal=Signal.SELL, xgb_signal=Signal.SELL,
+            bear_weakening=False, current_exposure=0.0,
+        )
+        assert exposure >= 0.0

@@ -33,6 +33,64 @@ def composite_signal_hybrid(
         return xgb_signal_low, "XGB"
 
 
+MAX_EXPOSURE = 0.98
+
+
+def _signal_to_exposure(signal: Signal, current_exposure: float) -> float:
+    """Convert a Signal enum to a target exposure value."""
+    if signal == Signal.BUY:
+        return MAX_EXPOSURE
+    elif signal == Signal.SELL:
+        return 0.0
+    else:
+        return current_exposure
+
+
+def composite_signal_blended(
+    regime_probs: dict[str, float],
+    sma_signal: Signal,
+    xgb_signal: Signal,
+    bear_weakening: bool = False,
+    current_exposure: float = 0.0,
+) -> float:
+    """Compute blended target exposure from regime probabilities.
+
+    Each regime's signal source determines a target exposure, then
+    the final exposure is the probability-weighted average.
+
+    Args:
+        regime_probs: Dict mapping regime label to probability.
+            Keys: "BULL", "BEAR", "CHOPPY" (or "CHOPPY_0", "CHOPPY_1" for 4-state).
+        sma_signal: Signal from SMA crossover.
+        xgb_signal: Signal from XGB at low confidence threshold.
+        bear_weakening: True if 5-day return is positive while dominant regime is BEAR.
+        current_exposure: Current portfolio exposure (0.0 to 0.98).
+
+    Returns:
+        Target exposure as float in [0.0, 0.98].
+    """
+    blended = 0.0
+
+    for label, prob in regime_probs.items():
+        if prob <= 0:
+            continue
+
+        if label == "BULL":
+            target = _signal_to_exposure(sma_signal, current_exposure)
+        elif label == "BEAR":
+            if bear_weakening:
+                target = _signal_to_exposure(xgb_signal, current_exposure)
+            else:
+                target = 0.0
+        else:
+            # CHOPPY, CHOPPY_0, CHOPPY_1, etc. all route to XGB
+            target = _signal_to_exposure(xgb_signal, current_exposure)
+
+        blended += prob * target
+
+    return max(0.0, min(MAX_EXPOSURE, blended))
+
+
 def count_consecutive_bear_days(regimes: pd.Series) -> int:
     """Count consecutive BEAR days ending at the last row.
 
