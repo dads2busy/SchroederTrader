@@ -19,10 +19,11 @@ TICKER = "SPY"
 SMA_SHORT_WINDOW = 50
 SMA_LONG_WINDOW = 200
 CASH_BUFFER_PCT = 0.02
-KELLY_MULTIPLIER = 2.0           # 2x Kelly — validated via walk-forward sweep
+POSITION_SIZING = "binary"       # binary (98% in / 0% out) — regime routing handles risk
+KELLY_MULTIPLIER = 2.0           # retained for shadow log analysis only
 KELLY_WIN_LOSS_RATIO = 0.76      # derived from walk-forward backtest
 XGB_THRESHOLD_LOW = 0.35         # confidence threshold for Choppy regime
-TRAILING_STOP_PCT = 0.08            # 8% portfolio drawdown triggers stop
+TRAILING_STOP_PCT = 0.10            # 10% portfolio drawdown triggers stop
 TRAILING_STOP_COOLDOWN_DAYS = 5     # trading days before re-entry allowed
 
 # Alpaca
