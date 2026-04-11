@@ -14,6 +14,7 @@ from schroeder_trader.config import (
     COMPOSITE_MODEL_PATH,
     DB_PATH,
     FEATURES_CSV_PATH,
+    HMM_MODEL_PATH,
     KELLY_MULTIPLIER,
     KELLY_WIN_LOSS_RATIO,
     PROJECT_ROOT,
@@ -27,8 +28,8 @@ from schroeder_trader.risk.trailing_stop import TrailingStop
 from schroeder_trader.logging_config import setup_logging
 from schroeder_trader.data.market_data import fetch_daily_bars, is_market_open_today
 from schroeder_trader.strategy.sma_crossover import Signal, generate_signal
-from schroeder_trader.strategy.composite import composite_signal_hybrid, count_consecutive_bear_days
-from schroeder_trader.strategy.regime_detector import Regime, compute_regime_labels, compute_regime_series
+from schroeder_trader.strategy.composite import composite_signal_hybrid, composite_signal_blended, count_consecutive_bear_days
+from schroeder_trader.strategy.regime_detector import Regime, HMMRegimeDetector, compute_regime_labels, compute_regime_series
 from schroeder_trader.risk.risk_manager import evaluate
 from schroeder_trader.execution.broker import (
     submit_order,
@@ -211,6 +212,15 @@ def _run_pipeline_inner(conn) -> None:
             idx_up = class_to_idx[2]
             idx_down = class_to_idx[0]
 
+            # Load HMM regime detector
+            hmm_detector = None
+            if HMM_MODEL_PATH.exists():
+                try:
+                    hmm_detector = HMMRegimeDetector.load(HMM_MODEL_PATH)
+                    logger.info("HMM regime detector loaded (%d states)", hmm_detector.n_states)
+                except Exception:
+                    logger.warning("Failed to load HMM detector, falling back to threshold", exc_info=True)
+
             # Load external features
             ext_df = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
             logger.info("External features loaded: %d rows, last date %s", len(ext_df), ext_df.index[-1])
@@ -320,6 +330,31 @@ def _run_pipeline_inner(conn) -> None:
                         k_frac or 0.0, k_qty or 0,
                         trailing_stop.high_water_mark, ts_triggered or ts_in_cooldown,
                     )
+
+                    # HMM blended signal (logged alongside threshold-based signal)
+                    if hmm_detector is not None:
+                        try:
+                            hmm_row = features[["log_return_20d", "volatility_20d", "vix_close", "vix_term_structure"]].iloc[[-1]]
+                            if not hmm_row.isna().any().any():
+                                regime_probs = hmm_detector.predict_proba(hmm_row)[0]
+                                hmm_dominant = hmm_detector.dominant_regime(regime_probs)
+
+                                current_exp = position_value / account["portfolio_value"] if account["portfolio_value"] > 0 else 0.0
+
+                                blended_exposure = composite_signal_blended(
+                                    regime_probs=regime_probs,
+                                    sma_signal=signal,
+                                    xgb_signal=composite_sig,
+                                    bear_weakening=bear_weakening,
+                                    current_exposure=current_exp,
+                                )
+                                logger.info(
+                                    "HMM blended: exposure=%.3f, dominant=%s, probs=%s",
+                                    blended_exposure, hmm_dominant.value,
+                                    {k: f"{v:.3f}" for k, v in regime_probs.items()},
+                                )
+                        except Exception:
+                            logger.warning("HMM prediction failed (non-fatal)", exc_info=True)
     except Exception:
         logger.exception("Shadow composite prediction failed (non-fatal)")
         try:
