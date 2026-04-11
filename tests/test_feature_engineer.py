@@ -97,3 +97,42 @@ def test_rsi_between_0_and_100():
     result = pipeline.compute_features(df)
     assert (result["rsi_14"] >= 0).all()
     assert (result["rsi_14"] <= 100).all()
+
+
+def test_compute_features_extended_includes_vix_term_structure():
+    """VIX term structure (VIX/VIX3M) should be computed when both columns exist."""
+    spy_df = pd.DataFrame(
+        {"close": np.linspace(100, 110, 50), "open": 100, "high": 110, "low": 90, "volume": 1000},
+        index=pd.date_range("2020-01-01", periods=50, freq="B"),
+    )
+    ext_df = pd.DataFrame(
+        {
+            "credit_spread": np.random.default_rng(42).normal(0, 0.01, 50),
+            "dollar_momentum": np.random.default_rng(42).normal(0, 0.01, 50),
+            "vix_close": np.full(50, 20.0),
+            "vix3m_close": np.full(50, 22.0),
+        },
+        index=pd.date_range("2020-01-01", periods=50, freq="B", name="date"),
+    )
+    pipeline = FeaturePipeline()
+    result = pipeline.compute_features_extended(spy_df, ext_df)
+    assert "vix_term_structure" in result.columns
+    assert abs(result["vix_term_structure"].iloc[-1] - 20.0 / 22.0) < 0.01
+
+
+def test_compute_features_extended_no_vix_columns():
+    """Without VIX columns, vix_term_structure should not be added."""
+    spy_df = pd.DataFrame(
+        {"close": np.linspace(100, 110, 50), "open": 100, "high": 110, "low": 90, "volume": 1000},
+        index=pd.date_range("2020-01-01", periods=50, freq="B"),
+    )
+    ext_df = pd.DataFrame(
+        {
+            "credit_spread": np.random.default_rng(42).normal(0, 0.01, 50),
+            "dollar_momentum": np.random.default_rng(42).normal(0, 0.01, 50),
+        },
+        index=pd.date_range("2020-01-01", periods=50, freq="B", name="date"),
+    )
+    pipeline = FeaturePipeline()
+    result = pipeline.compute_features_extended(spy_df, ext_df)
+    assert "vix_term_structure" not in result.columns

@@ -90,7 +90,7 @@ class FeaturePipeline:
 
         # Merge external features (forward-fill to cover market holidays)
         if ext_df is not None and len(ext_df) > 0:
-            ext_cols = [c for c in ("credit_spread", "dollar_momentum") if c in ext_df.columns]
+            ext_cols = [c for c in ("credit_spread", "dollar_momentum", "vix_close", "vix3m_close") if c in ext_df.columns]
             if ext_cols:
                 ext = ext_df[ext_cols].copy()
                 if hasattr(ext.index, "tz") and ext.index.tz is not None:
@@ -98,6 +98,10 @@ class FeaturePipeline:
                 ext.index = ext.index.normalize()
                 result = result.join(ext, how="left")
                 result[ext_cols] = result[ext_cols].ffill()
+
+        # VIX term structure: VIX / VIX3M (>1 = backwardation/fear, <1 = contango)
+        if "vix_close" in result.columns and "vix3m_close" in result.columns:
+            result["vix_term_structure"] = result["vix_close"] / result["vix3m_close"]
 
         # Drop rows where core features are NaN
         core_cols = [
