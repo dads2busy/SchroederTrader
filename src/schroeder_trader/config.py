@@ -12,6 +12,8 @@ LOG_DIR = PROJECT_ROOT / "logs"
 
 # Model paths
 COMPOSITE_MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_spy_20d.json"
+HMM_MODEL_PATH = PROJECT_ROOT / "models" / "hmm_regime.pkl"
+HMM_RETRAIN_DAYS = 30
 FEATURES_CSV_PATH = PROJECT_ROOT / "backtest" / "data" / "features_daily.csv"
 
 # Trading parameters

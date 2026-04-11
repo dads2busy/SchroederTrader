@@ -10,14 +10,14 @@ import numpy as np
 import pandas as pd
 
 from backtest.train_model import load_data
-from schroeder_trader.config import COMPOSITE_MODEL_PATH
+from schroeder_trader.config import COMPOSITE_MODEL_PATH, HMM_MODEL_PATH
 from schroeder_trader.strategy.feature_engineer import (
     FeaturePipeline,
     CLASS_DOWN,
     CLASS_FLAT,
     CLASS_UP,
 )
-from schroeder_trader.strategy.regime_detector import compute_regime_labels
+from schroeder_trader.strategy.regime_detector import compute_regime_labels, HMMRegimeDetector
 from schroeder_trader.strategy.xgboost_classifier import save_model
 from xgboost import XGBClassifier
 
@@ -135,6 +135,36 @@ def train_and_save():
     print(f"\nModel saved to {COMPOSITE_MODEL_PATH}")
     print(f"Model classes: {model.classes_}")
     print(f"Training rows: {len(X)}, n_estimators: {n_estimators}")
+
+    # Train HMM regime detector
+    print("\nTraining HMM regime detector...")
+    ext_path = DATA_DIR / "features_daily.csv"
+    ext_df = pd.read_csv(ext_path, index_col="date", parse_dates=True)
+
+    # Add VIX columns to features_df
+    for col in ["vix_close", "vix3m_close"]:
+        if col in ext_df.columns:
+            vix_series = ext_df[col].copy()
+            if hasattr(vix_series.index, "tz") and vix_series.index.tz is not None:
+                vix_series.index = vix_series.index.tz_localize(None)
+            vix_series.index = vix_series.index.normalize()
+            features_df[col] = vix_series.reindex(features_df.index).ffill()
+
+    if "vix_close" in features_df.columns and "vix3m_close" in features_df.columns:
+        features_df["vix_term_structure"] = features_df["vix_close"] / features_df["vix3m_close"]
+
+    hmm_features = ["log_return_20d", "volatility_20d", "vix_close", "vix_term_structure"]
+    hmm_df = features_df.dropna(subset=hmm_features)
+
+    if len(hmm_df) > 100:
+        detector = HMMRegimeDetector()
+        detector.fit(hmm_df)
+        HMM_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        detector.save(HMM_MODEL_PATH)
+        print(f"HMM saved to {HMM_MODEL_PATH}")
+        print(f"  States: {detector.n_states}, Labels: {detector.state_to_label_}")
+    else:
+        print("WARNING: Not enough data for HMM training")
 
 
 if __name__ == "__main__":
