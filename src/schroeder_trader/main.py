@@ -332,9 +332,10 @@ def _run_pipeline_inner(conn) -> None:
                     )
 
                     # HMM blended signal (logged alongside threshold-based signal)
-                    if hmm_detector is not None:
+                    hmm_cols = ["log_return_20d", "volatility_20d", "vix_close", "vix_term_structure"]
+                    if hmm_detector is not None and all(c in features.columns for c in hmm_cols):
                         try:
-                            hmm_row = features[["log_return_20d", "volatility_20d", "vix_close", "vix_term_structure"]].iloc[[-1]]
+                            hmm_row = features[hmm_cols].iloc[[-1]]
                             if not hmm_row.isna().any().any():
                                 regime_probs = hmm_detector.predict_proba(hmm_row)[0]
                                 hmm_dominant = hmm_detector.dominant_regime(regime_probs)
