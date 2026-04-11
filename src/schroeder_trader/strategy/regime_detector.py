@@ -120,7 +120,7 @@ class HMMRegimeDetector:
         n_samples, n_features = X.shape
         n = model.n_components
         log_likelihood = model.score(X)
-        # Transition matrix: n*(n-1) free params (rows sum to 1)
+        # Transition matrix: n*n params
         # Means: n * n_features
         # Full covariance: n * n_features*(n_features+1)/2
         n_params = (
