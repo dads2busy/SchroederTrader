@@ -28,6 +28,34 @@ AI-driven SPY trading system using XGBoost regime classification with composite 
 - `models/` — serialized model files (not in git)
 - `data/` — SQLite trade log, feature CSVs
 
+## Composite Signal Routing (CRITICAL)
+
+The system uses **regime-based signal routing** — different signal sources control trading depending on market regime. This is the core trading logic and must be preserved exactly.
+
+### Regime Detection (`strategy/regime_detector.py`)
+- **BULL:** 20-day log return > 0 AND volatility <= 252-day rolling median
+- **BEAR:** 20-day log return < 0 AND volatility > 252-day rolling median
+- **CHOPPY:** everything else
+
+### Signal Routing (`strategy/composite.py → composite_signal_hybrid()`)
+
+| Regime | Signal Source | Source Label | Logic |
+|--------|-------------|-------------|-------|
+| **BULL** | SMA crossover | `"SMA"` | Trust trend-following when trend is up + vol is normal |
+| **BEAR** | Flat (forced SELL) | `"FLAT"` | Stay defensive, go to cash |
+| **BEAR + weakening** | XGBoost (low threshold) | `"XGB_BEAR_WEAK"` | Tactical re-entry when 5-day return turns positive |
+| **CHOPPY** | XGBoost (low threshold) | `"XGB"` | ML handles sideways markets better than momentum |
+
+### Bear Weakening
+Detected when `regime == BEAR` AND `5-day log return > 0`. Switches BEAR from defensive flat to tactical XGBoost routing.
+
+### Overrides (applied after routing)
+- **Stale cash override:** Force BUY after 7+ days in cash if SMA50 > SMA200 (source: `"STALE_CASH"`)
+- **Trailing stop:** 10% portfolio drawdown triggers stop, 5-day cooldown before re-entry
+
+### Key Principle
+The SMA signal is NOT replaced by XGBoost everywhere — it is the primary signal in BULL regime. XGBoost only controls in CHOPPY and BEAR+weakening. In plain BEAR, nothing trades (flat). This regime routing is what produces Sharpe 2.53.
+
 ## Key Design Decisions
 
 - **Binary position sizing** (98% in or 0% out) — outperformed Kelly fractional sizing

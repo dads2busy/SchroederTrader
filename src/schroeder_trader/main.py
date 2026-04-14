@@ -142,47 +142,17 @@ def _run_pipeline_inner(conn) -> None:
     signal, sma_50, sma_200 = generate_signal(df)
     logger.info("Signal: %s | Close: $%.2f | SMA50: %.2f | SMA200: %.2f", signal.value, close_price, sma_50, sma_200)
 
-    # Step 8 (partial): Log signal
+    # Log signal
     signal_id = log_signal(conn, now, TICKER, close_price, sma_50, sma_200, signal.value)
 
-    # Step 6: Risk evaluation
+    # Step 6: Get account state
     account = get_account()
     position_qty = get_position(TICKER)
-    order_request = evaluate(
-        signal=signal,
-        portfolio_value=account["portfolio_value"],
-        close_price=close_price,
-        current_position_qty=position_qty,
-    )
-
-    # Step 7: Execute order
-    if order_request is not None:
-        result = submit_order(order_request, TICKER)
-        log_order(
-            conn, signal_id, result.alpaca_order_id,
-            result.timestamp, TICKER, order_request.action,
-            order_request.quantity, result.status,
-        )
-        send_trade_alert(
-            action=order_request.action,
-            ticker=TICKER,
-            quantity=order_request.quantity,
-            portfolio_value=account["portfolio_value"],
-            cash=account["cash"],
-            sma_50=sma_50,
-            sma_200=sma_200,
-        )
-
-    # Step 8: Log portfolio snapshot
-    account = get_account()  # refresh after potential trade
-    position_qty = get_position(TICKER)
     position_value = position_qty * close_price
-    log_portfolio(conn, now, account["cash"], position_qty, position_value, account["portfolio_value"])
 
-    # Step 9: Daily summary (sent after Step 11 with LLM report if available)
+    # Step 7: Compute composite signal (HOLD on failure — never trade blind)
+    effective_signal = Signal.HOLD
     llm_report = None
-
-    # Step 10: Composite shadow signal
     try:
         # Fetch/update external features (idempotent, skips if <24h old)
         try:
@@ -203,11 +173,11 @@ def _run_pipeline_inner(conn) -> None:
         logger.info("Loading composite model...")
         model = load_model(COMPOSITE_MODEL_PATH)
         if model is None:
-            logger.info("No composite model at %s, skipping shadow step", COMPOSITE_MODEL_PATH)
+            logger.info("No composite model at %s, holding", COMPOSITE_MODEL_PATH)
         elif list(model.classes_) != [0, 1, 2]:
-            logger.error("Model classes %s don't match expected [0, 1, 2]", list(model.classes_))
+            logger.error("Model classes %s don't match expected [0, 1, 2], holding", list(model.classes_))
         elif not FEATURES_CSV_PATH.exists():
-            logger.warning("No external features at %s, skipping shadow step", FEATURES_CSV_PATH)
+            logger.warning("No external features at %s, holding", FEATURES_CSV_PATH)
         else:
             class_to_idx = {int(c): i for i, c in enumerate(model.classes_)}
             idx_up = class_to_idx[2]
@@ -229,7 +199,7 @@ def _run_pipeline_inner(conn) -> None:
             # Fetch 600 days of SPY data for feature + regime warmup
             # (regime needs 252-day rolling median + 20-day vol window)
             shadow_df = fetch_daily_bars(TICKER, days=600)
-            logger.info("Shadow bars fetched: %d rows, last date %s", len(shadow_df), shadow_df.index[-1])
+            logger.info("Bars fetched: %d rows, last date %s", len(shadow_df), shadow_df.index[-1])
 
             # Compute extended features
             pipeline = FeaturePipeline()
@@ -254,7 +224,7 @@ def _run_pipeline_inner(conn) -> None:
                     lr5 = features["log_return_5d"].iloc[-1]
                     bear_weakening = not pd.isna(lr5) and lr5 > 0
 
-                # XGBoost signals at both thresholds
+                # XGBoost signals at low threshold
                 feature_cols = [
                     "log_return_5d", "log_return_20d", "volatility_20d",
                     "credit_spread", "dollar_momentum", "regime_label",
@@ -263,7 +233,7 @@ def _run_pipeline_inner(conn) -> None:
 
                 if last_row.isna().any().any():
                     nan_cols = [c for c in feature_cols if last_row[c].isna().any()]
-                    logger.warning("NaN in feature row (columns: %s), skipping shadow signal", nan_cols)
+                    logger.warning("NaN in feature row (columns: %s), holding", nan_cols)
                 else:
                     proba = model.predict_proba(last_row)[0]
                     pred_class = int(np.argmax(proba))
@@ -273,7 +243,7 @@ def _run_pipeline_inner(conn) -> None:
                         "UP": float(proba[idx_up]),
                     }
 
-                    # Low threshold for Choppy regime
+                    # Low threshold for Choppy/Bear-weakening regimes
                     if pred_class == idx_up and proba[idx_up] > XGB_THRESHOLD_LOW:
                         xgb_low = Signal.BUY
                     elif pred_class == idx_down and proba[idx_down] > XGB_THRESHOLD_LOW:
@@ -305,7 +275,7 @@ def _run_pipeline_inner(conn) -> None:
                             days_in_cash, today_regime.value, sma_50, sma_200,
                         )
 
-                    # Always compute Kelly sizing for analysis
+                    # Kelly sizing (for analysis/logging)
                     k_frac = compute_kelly_fraction(
                         p_up=proba[idx_up],
                         p_down=proba[idx_down],
@@ -328,7 +298,7 @@ def _run_pipeline_inner(conn) -> None:
                     )
                     ts_in_cooldown = trailing_stop.in_cooldown(today_date, ts_trading_dates)
 
-                    # Log shadow signal (always log XGB prediction for analysis)
+                    # Log shadow signal (always log for analysis)
                     log_shadow_signal(
                         conn, now, TICKER, close_price,
                         predicted_class=pred_class,
@@ -344,13 +314,23 @@ def _run_pipeline_inner(conn) -> None:
                         trailing_stop_triggered=ts_triggered or ts_in_cooldown,
                     )
                     logger.info(
-                        "Shadow composite: %s (source=%s, regime=%s, bear_days=%d, kelly=%.3f, kelly_qty=%d, hwm=%.0f, ts_stop=%s)",
+                        "Composite: %s (source=%s, regime=%s, bear_days=%d, kelly=%.3f, kelly_qty=%d, hwm=%.0f, ts_stop=%s)",
                         composite_sig.value, source, today_regime.value, bear_days,
                         k_frac or 0.0, k_qty or 0,
                         trailing_stop.high_water_mark, ts_triggered or ts_in_cooldown,
                     )
 
-                    # HMM blended signal (logged alongside threshold-based signal)
+                    # Apply trailing stop override
+                    if ts_triggered and position_qty > 0:
+                        effective_signal = Signal.SELL
+                        logger.info("Trailing stop triggered, forcing SELL")
+                    elif (ts_triggered or ts_in_cooldown) and composite_sig == Signal.BUY:
+                        effective_signal = Signal.HOLD
+                        logger.info("Trailing stop cooldown active, blocking BUY")
+                    else:
+                        effective_signal = composite_sig
+
+                    # HMM blended signal (logged for analysis only)
                     hmm_cols = ["log_return_20d", "volatility_20d", "vix_close", "vix_term_structure"]
                     if hmm_detector is not None and all(c in features.columns for c in hmm_cols):
                         try:
@@ -376,13 +356,46 @@ def _run_pipeline_inner(conn) -> None:
                         except Exception:
                             logger.warning("HMM prediction failed (non-fatal)", exc_info=True)
     except Exception:
-        logger.exception("Shadow composite prediction failed (non-fatal)")
+        logger.exception("Composite signal failed, holding")
         try:
-            send_error_alert("Shadow signal failed", traceback.format_exc()[-500:])
+            send_error_alert("Composite signal failed", traceback.format_exc()[-500:])
         except Exception:
-            logger.exception("Failed to send shadow failure alert")
+            logger.exception("Failed to send composite failure alert")
 
-    # Step 11: LLM daily intelligence report (non-fatal)
+    logger.info("Effective signal: %s", effective_signal.value)
+
+    # Step 8: Risk evaluation + execution
+    order_request = evaluate(
+        signal=effective_signal,
+        portfolio_value=account["portfolio_value"],
+        close_price=close_price,
+        current_position_qty=position_qty,
+    )
+
+    if order_request is not None:
+        result = submit_order(order_request, TICKER)
+        log_order(
+            conn, signal_id, result.alpaca_order_id,
+            result.timestamp, TICKER, order_request.action,
+            order_request.quantity, result.status,
+        )
+        send_trade_alert(
+            action=order_request.action,
+            ticker=TICKER,
+            quantity=order_request.quantity,
+            portfolio_value=account["portfolio_value"],
+            cash=account["cash"],
+            sma_50=sma_50,
+            sma_200=sma_200,
+        )
+
+    # Step 9: Log portfolio snapshot
+    account = get_account()  # refresh after potential trade
+    position_qty = get_position(TICKER)
+    position_value = position_qty * close_price
+    log_portfolio(conn, now, account["cash"], position_qty, position_value, account["portfolio_value"])
+
+    # Step 10: LLM daily intelligence report (non-fatal)
     try:
         recent = get_shadow_signals(conn)[-10:]
         if recent:
