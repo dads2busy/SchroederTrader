@@ -72,6 +72,13 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             conn.execute(f"ALTER TABLE shadow_signals ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError:
             pass  # column already exists
+    for col, col_type in [
+        ("signal_close_price", "REAL"), ("slippage", "REAL"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.commit()
     return conn
 
@@ -102,10 +109,11 @@ def log_order(
     action: str,
     quantity: int,
     status: str,
+    signal_close_price: float | None = None,
 ) -> int:
     cursor = conn.execute(
-        "INSERT INTO orders (signal_id, alpaca_order_id, timestamp, ticker, action, quantity, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (signal_id, alpaca_order_id, timestamp.isoformat(), ticker, action, quantity, status),
+        "INSERT INTO orders (signal_id, alpaca_order_id, timestamp, ticker, action, quantity, status, signal_close_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (signal_id, alpaca_order_id, timestamp.isoformat(), ticker, action, quantity, status, signal_close_price),
     )
     conn.commit()
     return cursor.lastrowid
@@ -150,9 +158,21 @@ def update_order_fill(
     fill_timestamp: datetime,
     status: str,
 ) -> None:
+    # Compute slippage if signal_close_price was recorded
+    row = conn.execute(
+        "SELECT signal_close_price, action FROM orders WHERE alpaca_order_id = ?",
+        (alpaca_order_id,),
+    ).fetchone()
+    slippage = None
+    if row and row["signal_close_price"] is not None and fill_price > 0:
+        # Positive slippage = cost (paid more on BUY, received less on SELL)
+        if row["action"] == "BUY":
+            slippage = fill_price - row["signal_close_price"]
+        else:
+            slippage = row["signal_close_price"] - fill_price
     conn.execute(
-        "UPDATE orders SET fill_price = ?, fill_timestamp = ?, status = ? WHERE alpaca_order_id = ?",
-        (fill_price, fill_timestamp.isoformat(), status, alpaca_order_id),
+        "UPDATE orders SET fill_price = ?, fill_timestamp = ?, status = ?, slippage = ? WHERE alpaca_order_id = ?",
+        (fill_price, fill_timestamp.isoformat(), status, slippage, alpaca_order_id),
     )
     conn.commit()
 

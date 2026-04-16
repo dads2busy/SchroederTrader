@@ -122,7 +122,11 @@ def _run_pipeline_inner(conn) -> None:
                     quantity=order["quantity"],
                     fill_price=status["fill_price"],
                 )
-                logger.info("Order %s filled at $%.2f", order["alpaca_order_id"], status["fill_price"])
+                slippage = status["fill_price"] - order["signal_close_price"] if order.get("signal_close_price") else None
+                if slippage is not None:
+                    logger.info("Order %s filled at $%.2f (slippage: $%.2f/share)", order["alpaca_order_id"], status["fill_price"], slippage)
+                else:
+                    logger.info("Order %s filled at $%.2f", order["alpaca_order_id"], status["fill_price"])
             elif status["status"] in ("canceled", "expired", "rejected"):
                 update_order_fill(conn, order["alpaca_order_id"], 0.0, now, "REJECTED")
                 send_error_alert("Order rejected/canceled", f"Order {order['alpaca_order_id']} status: {status['status']}")
@@ -378,6 +382,7 @@ def _run_pipeline_inner(conn) -> None:
             conn, signal_id, result.alpaca_order_id,
             result.timestamp, TICKER, order_request.action,
             order_request.quantity, result.status,
+            signal_close_price=close_price,
         )
         send_trade_alert(
             action=order_request.action,
