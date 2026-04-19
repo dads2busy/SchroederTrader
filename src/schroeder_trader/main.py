@@ -432,12 +432,14 @@ def _run_pipeline_inner(conn) -> None:
             current_price=close_price,
             recent_closes=recent_closes,
             position_qty=position_qty,
+            portfolio_value=account["portfolio_value"],
         )
         for resp in query_all(oracle_input):
             log_llm_signal(
                 conn, now, TICKER, close_price,
                 provider=resp.provider, model=resp.model,
-                action=resp.action, confidence=resp.confidence,
+                action=resp.action, target_exposure=resp.target_exposure,
+                confidence=resp.confidence,
                 regime_assessment=resp.regime_assessment,
                 key_drivers=resp.key_drivers, reasoning=resp.reasoning,
                 raw_response=resp.raw_response, error=resp.error,
@@ -446,8 +448,9 @@ def _run_pipeline_inner(conn) -> None:
                 logger.warning("LLM oracle %s errored: %s", resp.provider, resp.error)
             else:
                 logger.info(
-                    "LLM oracle %s: %s (%s conf, regime=%s)",
-                    resp.provider, resp.action, resp.confidence, resp.regime_assessment,
+                    "LLM oracle %s: %s target=%.2f (%s conf, regime=%s)",
+                    resp.provider, resp.action, resp.target_exposure,
+                    resp.confidence, resp.regime_assessment,
                 )
     except Exception:
         logger.exception("LLM oracle block failed (non-fatal)")

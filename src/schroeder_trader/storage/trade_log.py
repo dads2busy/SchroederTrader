@@ -52,6 +52,7 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             provider TEXT NOT NULL,
             model TEXT NOT NULL,
             action TEXT NOT NULL,
+            target_exposure REAL,
             confidence TEXT,
             regime_assessment TEXT,
             key_drivers TEXT,
@@ -94,6 +95,11 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     ]:
         try:
             conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    for col, col_type in [("target_exposure", "REAL")]:
+        try:
+            conn.execute(f"ALTER TABLE llm_shadow_signals ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError:
             pass  # column already exists
     conn.commit()
@@ -265,6 +271,7 @@ def log_llm_signal(
     provider: str,
     model: str,
     action: str,
+    target_exposure: float | None,
     confidence: str | None,
     regime_assessment: str | None,
     key_drivers: list[str] | None,
@@ -275,11 +282,11 @@ def log_llm_signal(
     import json as _json
     cursor = conn.execute(
         "INSERT INTO llm_shadow_signals (timestamp, ticker, close_price, provider, model, "
-        "action, confidence, regime_assessment, key_drivers, reasoning, raw_response, error) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "action, target_exposure, confidence, regime_assessment, key_drivers, reasoning, raw_response, error) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             timestamp.isoformat(), ticker, close_price, provider, model,
-            action, confidence, regime_assessment,
+            action, target_exposure, confidence, regime_assessment,
             _json.dumps(key_drivers) if key_drivers is not None else None,
             reasoning, raw_response, error,
         ),

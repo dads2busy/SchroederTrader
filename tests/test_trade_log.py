@@ -134,7 +134,8 @@ def test_log_llm_signal_roundtrip(tmp_path):
     log_llm_signal(
         conn, now, "SPY", 710.14,
         provider="claude", model="claude-opus-4-7",
-        action="BUY", confidence="HIGH", regime_assessment="BULL",
+        action="BUY", target_exposure=0.95, confidence="HIGH",
+        regime_assessment="BULL",
         key_drivers=["momentum", "vix low"], reasoning="trend intact",
         raw_response='{"action": "BUY"}',
     )
@@ -142,6 +143,7 @@ def test_log_llm_signal_roundtrip(tmp_path):
     assert len(rows) == 1
     assert rows[0]["provider"] == "claude"
     assert rows[0]["action"] == "BUY"
+    assert rows[0]["target_exposure"] == 0.95
     assert rows[0]["key_drivers"] == '["momentum", "vix low"]'
     assert rows[0]["error"] is None
     conn.close()
@@ -153,7 +155,8 @@ def test_log_llm_signal_records_error(tmp_path):
     log_llm_signal(
         conn, now, "SPY", 710.14,
         provider="openai", model="gpt-5",
-        action="HOLD", confidence="LOW", regime_assessment="CHOPPY",
+        action="HOLD", target_exposure=0.0, confidence="LOW",
+        regime_assessment="CHOPPY",
         key_drivers=[], reasoning="",
         raw_response="", error="TimeoutError: read timed out",
     )
