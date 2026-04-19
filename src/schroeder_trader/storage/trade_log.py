@@ -44,6 +44,23 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS llm_shadow_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            close_price REAL NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            action TEXT NOT NULL,
+            confidence TEXT,
+            regime_assessment TEXT,
+            key_drivers TEXT,
+            reasoning TEXT,
+            raw_response TEXT,
+            error TEXT
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS shadow_signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
@@ -237,4 +254,42 @@ def log_shadow_signal(
 
 def get_shadow_signals(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute("SELECT * FROM shadow_signals ORDER BY id").fetchall()
+    return [dict(row) for row in rows]
+
+
+def log_llm_signal(
+    conn: sqlite3.Connection,
+    timestamp: datetime,
+    ticker: str,
+    close_price: float,
+    provider: str,
+    model: str,
+    action: str,
+    confidence: str | None,
+    regime_assessment: str | None,
+    key_drivers: list[str] | None,
+    reasoning: str | None,
+    raw_response: str | None,
+    error: str | None = None,
+) -> int:
+    import json as _json
+    cursor = conn.execute(
+        "INSERT INTO llm_shadow_signals (timestamp, ticker, close_price, provider, model, "
+        "action, confidence, regime_assessment, key_drivers, reasoning, raw_response, error) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            timestamp.isoformat(), ticker, close_price, provider, model,
+            action, confidence, regime_assessment,
+            _json.dumps(key_drivers) if key_drivers is not None else None,
+            reasoning, raw_response, error,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_llm_signals(conn: sqlite3.Connection, limit: int = 60) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM llm_shadow_signals ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
     return [dict(row) for row in rows]

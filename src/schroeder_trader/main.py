@@ -58,6 +58,7 @@ from schroeder_trader.storage.trade_log import (
     update_order_fill,
     log_shadow_signal,
     get_shadow_signals,
+    log_llm_signal,
 )
 from schroeder_trader.strategy.feature_engineer import FeaturePipeline
 from schroeder_trader.strategy.xgboost_classifier import load_model
@@ -68,6 +69,7 @@ from schroeder_trader.alerts.email_alert import (
     send_daily_summary,
 )
 from schroeder_trader.agents.daily_report import generate_daily_report
+from schroeder_trader.agents.llm_oracle import OracleInput, query_all
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +424,35 @@ def _run_pipeline_inner(conn) -> None:
     position_value = position_qty * close_price
     log_portfolio(conn, now, account["cash"], position_qty, position_value, account["portfolio_value"])
 
-    # Step 11: LLM daily intelligence report (non-fatal)
+    # Step 11: LLM oracle shadow (Claude + ChatGPT head-to-head, non-fatal)
+    try:
+        recent_closes = df["close"].tail(20).astype(float).tolist()
+        oracle_input = OracleInput(
+            date_str=today,
+            current_price=close_price,
+            recent_closes=recent_closes,
+            position_qty=position_qty,
+        )
+        for resp in query_all(oracle_input):
+            log_llm_signal(
+                conn, now, TICKER, close_price,
+                provider=resp.provider, model=resp.model,
+                action=resp.action, confidence=resp.confidence,
+                regime_assessment=resp.regime_assessment,
+                key_drivers=resp.key_drivers, reasoning=resp.reasoning,
+                raw_response=resp.raw_response, error=resp.error,
+            )
+            if resp.error:
+                logger.warning("LLM oracle %s errored: %s", resp.provider, resp.error)
+            else:
+                logger.info(
+                    "LLM oracle %s: %s (%s conf, regime=%s)",
+                    resp.provider, resp.action, resp.confidence, resp.regime_assessment,
+                )
+    except Exception:
+        logger.exception("LLM oracle block failed (non-fatal)")
+
+    # Step 12: LLM daily intelligence report (non-fatal)
     try:
         recent = get_shadow_signals(conn)[-10:]
         if recent:

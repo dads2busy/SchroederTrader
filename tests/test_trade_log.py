@@ -13,6 +13,8 @@ from schroeder_trader.storage.trade_log import (
     update_order_fill,
     log_shadow_signal,
     get_shadow_signals,
+    log_llm_signal,
+    get_llm_signals,
 )
 
 
@@ -123,6 +125,40 @@ def test_log_shadow_signal_with_kelly(tmp_path):
     assert len(rows) == 1
     assert rows[0]["kelly_fraction"] == pytest.approx(0.233)
     assert rows[0]["kelly_qty"] == 35
+    conn.close()
+
+
+def test_log_llm_signal_roundtrip(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+    now = datetime(2026, 4, 20, 20, 30, tzinfo=timezone.utc)
+    log_llm_signal(
+        conn, now, "SPY", 710.14,
+        provider="claude", model="claude-opus-4-7",
+        action="BUY", confidence="HIGH", regime_assessment="BULL",
+        key_drivers=["momentum", "vix low"], reasoning="trend intact",
+        raw_response='{"action": "BUY"}',
+    )
+    rows = get_llm_signals(conn)
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "claude"
+    assert rows[0]["action"] == "BUY"
+    assert rows[0]["key_drivers"] == '["momentum", "vix low"]'
+    assert rows[0]["error"] is None
+    conn.close()
+
+
+def test_log_llm_signal_records_error(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+    now = datetime(2026, 4, 20, 20, 30, tzinfo=timezone.utc)
+    log_llm_signal(
+        conn, now, "SPY", 710.14,
+        provider="openai", model="gpt-5",
+        action="HOLD", confidence="LOW", regime_assessment="CHOPPY",
+        key_drivers=[], reasoning="",
+        raw_response="", error="TimeoutError: read timed out",
+    )
+    rows = get_llm_signals(conn)
+    assert rows[0]["error"] == "TimeoutError: read timed out"
     conn.close()
 
 

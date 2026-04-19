@@ -41,4 +41,7 @@ ALERT_EMAIL_APP_PASSWORD = os.getenv("ALERT_EMAIL_APP_PASSWORD", "")
 
 # LLM
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-LLM_MODEL = "claude-haiku-4-5-20251001"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+LLM_MODEL = "claude-haiku-4-5-20251001"  # daily report narrator (cheap)
+CLAUDE_ORACLE_MODEL = "claude-opus-4-7"  # trading oracle comparison (premium)
+OPENAI_ORACLE_MODEL = "gpt-5"            # trading oracle comparison (premium)
