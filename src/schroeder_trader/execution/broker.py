@@ -1,11 +1,11 @@
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from alpaca.common.exceptions import APIError
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, OrderStatus, QueryOrderStatus, TimeInForce
+from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
 
 from schroeder_trader.config import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
 from schroeder_trader.risk.risk_manager import OrderRequest
@@ -85,3 +85,16 @@ def get_account() -> dict:
         "portfolio_value": float(account.portfolio_value),
         "cash": float(account.cash),
     }
+
+
+def list_recent_orders(ticker: str, lookback_days: int = 7) -> list:
+    """Return Alpaca orders for ticker across all statuses within lookback window."""
+    client = _get_trading_client()
+    after = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    request = GetOrdersRequest(
+        status=QueryOrderStatus.ALL,
+        symbols=[ticker],
+        after=after,
+        limit=500,
+    )
+    return list(client.get_orders(filter=request))

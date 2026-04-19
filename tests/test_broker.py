@@ -82,3 +82,24 @@ def test_get_account(mock_client):
     info = get_account()
     assert info["portfolio_value"] == 28539.50
     assert info["cash"] == 5000.00
+
+
+@patch("schroeder_trader.execution.broker._get_trading_client")
+def test_list_recent_orders_filters_by_ticker_and_window(mock_client):
+    from schroeder_trader.execution.broker import list_recent_orders
+    from alpaca.trading.enums import QueryOrderStatus
+
+    client = MagicMock()
+    order1 = MagicMock()
+    order2 = MagicMock()
+    client.get_orders.return_value = [order1, order2]
+    mock_client.return_value = client
+
+    result = list_recent_orders("SPY", lookback_days=3)
+    assert result == [order1, order2]
+
+    call_kwargs = client.get_orders.call_args.kwargs
+    request = call_kwargs["filter"]
+    assert request.symbols == ["SPY"]
+    assert request.status == QueryOrderStatus.ALL
+    assert request.limit == 500

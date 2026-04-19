@@ -151,6 +151,38 @@ def get_pending_orders(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def get_order_by_alpaca_id(conn: sqlite3.Connection, alpaca_order_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM orders WHERE alpaca_order_id = ?", (alpaca_order_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def insert_reconciled_order(
+    conn: sqlite3.Connection,
+    alpaca_order_id: str,
+    timestamp: datetime,
+    ticker: str,
+    action: str,
+    quantity: int,
+    status: str,
+    fill_price: float | None = None,
+    fill_timestamp: datetime | None = None,
+) -> int:
+    # signal_id=0 marks the row as reconciled from Alpaca rather than originated by us.
+    cursor = conn.execute(
+        "INSERT INTO orders (signal_id, alpaca_order_id, timestamp, ticker, action, "
+        "quantity, status, fill_price, fill_timestamp) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            0, alpaca_order_id, timestamp.isoformat(), ticker, action, quantity, status,
+            fill_price, fill_timestamp.isoformat() if fill_timestamp else None,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
 def update_order_fill(
     conn: sqlite3.Connection,
     alpaca_order_id: str,

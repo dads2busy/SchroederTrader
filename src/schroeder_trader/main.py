@@ -1,11 +1,20 @@
 import json
 import logging
+import signal
+import socket
 import subprocess
 import sys
 import traceback
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
+
+# Guard against silent network hangs. Alpaca/Anthropic/SMTP clients inherit
+# the default socket timeout when they don't set their own.
+_SOCKET_TIMEOUT_SECONDS = 60
+# Wall-clock ceiling for the full pipeline. If anything blocks past this,
+# SIGALRM raises TimeoutError and the main() handler sends an alert.
+_PIPELINE_DEADLINE_SECONDS = 600
 
 import numpy as np
 import pandas as pd
@@ -38,6 +47,7 @@ from schroeder_trader.execution.broker import (
     get_position,
     get_account,
 )
+from schroeder_trader.execution.reconcile import reconcile_orders
 from schroeder_trader.storage.trade_log import (
     init_db,
     log_signal,
@@ -97,13 +107,19 @@ def _run_pipeline_inner(conn) -> None:
     else:
         trailing_stop = TrailingStop(TRAILING_STOP_PCT, TRAILING_STOP_COOLDOWN_DAYS)
 
-    # Step 1: Idempotency check
-    existing = get_signal_by_date(conn, today)
-    if existing is not None:
-        logger.info("Already ran today (%s), exiting", today)
-        return
+    # Step 1: Reconcile orphaned orders (from prior crash between submit and log)
+    try:
+        orphans = reconcile_orders(conn, TICKER)
+        if orphans:
+            send_error_alert(
+                "Orphaned orders reconciled",
+                f"Found {len(orphans)} orders at Alpaca with no DB record: {orphans}",
+            )
+    except Exception:
+        logger.exception("Order reconciliation failed (non-fatal)")
 
-    # Step 2: Fill check for pending orders
+    # Step 2: Fill check for pending orders (runs before idempotency so a crashed
+    # run's pending orders still get updated on manual re-run)
     pending = get_pending_orders(conn)
     for order in pending:
         try:
@@ -133,28 +149,34 @@ def _run_pipeline_inner(conn) -> None:
         except Exception:
             logger.exception("Error checking order %s", order["alpaca_order_id"])
 
-    # Step 3: Market calendar check
+    # Step 3: Idempotency check (after fill + reconcile so those always run)
+    existing = get_signal_by_date(conn, today)
+    if existing is not None:
+        logger.info("Already ran today (%s), exiting", today)
+        return
+
+    # Step 4: Market calendar check
     if not is_market_open_today(today):
         logger.info("Market closed today (%s), exiting", today)
         return
 
-    # Step 4: Fetch data
+    # Step 5: Fetch data
     df = fetch_daily_bars(TICKER)
     close_price = float(df["close"].iloc[-1])
 
-    # Step 5: Generate signal
+    # Step 6: Generate signal
     signal, sma_50, sma_200 = generate_signal(df)
     logger.info("Signal: %s | Close: $%.2f | SMA50: %.2f | SMA200: %.2f", signal.value, close_price, sma_50, sma_200)
 
     # Log signal
     signal_id = log_signal(conn, now, TICKER, close_price, sma_50, sma_200, signal.value)
 
-    # Step 6: Get account state
+    # Step 7: Get account state
     account = get_account()
     position_qty = get_position(TICKER)
     position_value = position_qty * close_price
 
-    # Step 7: Compute composite signal (HOLD on failure — never trade blind)
+    # Step 8: Compute composite signal (HOLD on failure — never trade blind)
     effective_signal = Signal.HOLD
     llm_report = None
     try:
@@ -368,7 +390,7 @@ def _run_pipeline_inner(conn) -> None:
 
     logger.info("Effective signal: %s", effective_signal.value)
 
-    # Step 8: Risk evaluation + execution
+    # Step 9: Risk evaluation + execution
     order_request = evaluate(
         signal=effective_signal,
         portfolio_value=account["portfolio_value"],
@@ -394,13 +416,13 @@ def _run_pipeline_inner(conn) -> None:
             sma_200=sma_200,
         )
 
-    # Step 9: Log portfolio snapshot
+    # Step 10: Log portfolio snapshot
     account = get_account()  # refresh after potential trade
     position_qty = get_position(TICKER)
     position_value = position_qty * close_price
     log_portfolio(conn, now, account["cash"], position_qty, position_value, account["portfolio_value"])
 
-    # Step 10: LLM daily intelligence report (non-fatal)
+    # Step 11: LLM daily intelligence report (non-fatal)
     try:
         recent = get_shadow_signals(conn)[-10:]
         if recent:
@@ -427,8 +449,17 @@ def _run_pipeline_inner(conn) -> None:
     logger.info("Pipeline complete")
 
 
+def _deadline_handler(signum, frame):
+    raise TimeoutError(
+        f"Pipeline exceeded wall-clock deadline of {_PIPELINE_DEADLINE_SECONDS}s"
+    )
+
+
 def main() -> None:
     setup_logging()
+    socket.setdefaulttimeout(_SOCKET_TIMEOUT_SECONDS)
+    signal.signal(signal.SIGALRM, _deadline_handler)
+    signal.alarm(_PIPELINE_DEADLINE_SECONDS)
     try:
         run_pipeline()
     except Exception:
@@ -442,6 +473,8 @@ def main() -> None:
         except Exception:
             logger.exception("Failed to send error alert")
         sys.exit(1)
+    finally:
+        signal.alarm(0)
 
 
 if __name__ == "__main__":
