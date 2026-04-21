@@ -4,6 +4,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 import traceback
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -15,6 +16,10 @@ _SOCKET_TIMEOUT_SECONDS = 60
 # Wall-clock ceiling for the full pipeline. If anything blocks past this,
 # SIGALRM raises TimeoutError and the main() handler sends an alert.
 _PIPELINE_DEADLINE_SECONDS = 600
+# DNS backoff schedule (seconds before attempts 1..N). Handles the
+# wake-from-sleep case where launchd fires before the network is ready.
+_NETWORK_READY_BACKOFFS = [0, 15, 30, 45]
+_NETWORK_READY_HOST = "paper-api.alpaca.markets"
 
 import numpy as np
 import pandas as pd
@@ -488,12 +493,36 @@ def _deadline_handler(signum, frame):
     )
 
 
+def _wait_for_network(host: str = _NETWORK_READY_HOST) -> None:
+    """Block until DNS resolves for host; handles launchd-after-wake DNS lag."""
+    last_error = None
+    for i, delay in enumerate(_NETWORK_READY_BACKOFFS):
+        if delay > 0:
+            logger.info(
+                "Network not ready; sleeping %ds before retry %d/%d",
+                delay, i + 1, len(_NETWORK_READY_BACKOFFS),
+            )
+            time.sleep(delay)
+        try:
+            socket.gethostbyname(host)
+            if i > 0:
+                logger.info("Network ready after %d retries", i)
+            return
+        except socket.gaierror as exc:
+            last_error = exc
+    raise RuntimeError(
+        f"DNS resolution failed for {host} after "
+        f"{len(_NETWORK_READY_BACKOFFS)} attempts: {last_error}"
+    )
+
+
 def main() -> None:
     setup_logging()
     socket.setdefaulttimeout(_SOCKET_TIMEOUT_SECONDS)
     signal.signal(signal.SIGALRM, _deadline_handler)
     signal.alarm(_PIPELINE_DEADLINE_SECONDS)
     try:
+        _wait_for_network()
         run_pipeline()
     except Exception:
         logger.exception("Pipeline failed")
