@@ -8,7 +8,7 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.requests import GetCalendarRequest
 
 from schroeder_trader.config import ALPACA_API_KEY, ALPACA_SECRET_KEY
-from schroeder_trader.execution.broker import _get_trading_client
+from schroeder_trader.execution.broker import _get_trading_client, _retry_on_connection_error
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ def _get_data_client() -> StockHistoricalDataClient:
     return _data_client
 
 
+@_retry_on_connection_error()
 def fetch_daily_bars(ticker: str, days: int = 365) -> pd.DataFrame:
     client = _get_data_client()
     end = datetime.now()
@@ -44,6 +45,7 @@ def fetch_daily_bars(ticker: str, days: int = 365) -> pd.DataFrame:
     return df[["open", "high", "low", "close", "volume"]]
 
 
+@_retry_on_connection_error()
 def is_market_open_today(date_str: str | None = None) -> bool:
     client = _get_trading_client()
     if date_str is None:

@@ -84,6 +84,38 @@ def test_get_account(mock_client):
     assert info["cash"] == 5000.00
 
 
+def test_retry_decorator_retries_then_succeeds(monkeypatch):
+    from requests.exceptions import ConnectionError as RequestsConnectionError
+    from schroeder_trader.execution.broker import _retry_on_connection_error
+
+    monkeypatch.setattr("schroeder_trader.execution.broker.time.sleep", lambda _: None)
+    calls = {"n": 0}
+
+    @_retry_on_connection_error(retries=2, delay=0)
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RequestsConnectionError("boom")
+        return "ok"
+
+    assert flaky() == "ok"
+    assert calls["n"] == 2
+
+
+def test_retry_decorator_reraises_after_exhaustion(monkeypatch):
+    from requests.exceptions import ConnectionError as RequestsConnectionError
+    from schroeder_trader.execution.broker import _retry_on_connection_error
+
+    monkeypatch.setattr("schroeder_trader.execution.broker.time.sleep", lambda _: None)
+
+    @_retry_on_connection_error(retries=2, delay=0)
+    def always_fails():
+        raise RequestsConnectionError("persistent")
+
+    with __import__("pytest").raises(RequestsConnectionError):
+        always_fails()
+
+
 @patch("schroeder_trader.execution.broker._get_trading_client")
 def test_list_recent_orders_filters_by_ticker_and_window(mock_client):
     from schroeder_trader.execution.broker import list_recent_orders

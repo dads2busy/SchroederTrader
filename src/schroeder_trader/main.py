@@ -423,9 +423,12 @@ def _run_pipeline_inner(conn) -> None:
             sma_200=sma_200,
         )
 
-    # Step 10: Log portfolio snapshot
-    account = get_account()  # refresh after potential trade
-    position_qty = get_position(TICKER)
+    # Step 10: Log portfolio snapshot (non-fatal on Alpaca failure — fall back to pre-trade values)
+    try:
+        account = get_account()
+        position_qty = get_position(TICKER)
+    except Exception:
+        logger.exception("Account/position refresh failed; using pre-trade values for snapshot")
     position_value = position_qty * close_price
     log_portfolio(conn, now, account["cash"], position_qty, position_value, account["portfolio_value"])
 

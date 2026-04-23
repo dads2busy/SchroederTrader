@@ -1,11 +1,14 @@
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 
 from alpaca.common.exceptions import APIError
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, OrderStatus, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from schroeder_trader.config import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
 from schroeder_trader.risk.risk_manager import OrderRequest
@@ -13,6 +16,33 @@ from schroeder_trader.risk.risk_manager import OrderRequest
 logger = logging.getLogger(__name__)
 
 _client = None
+
+
+def _retry_on_connection_error(retries: int = 2, delay: float = 3.0):
+    """Decorator: retry on requests ConnectionError (e.g. RemoteDisconnected).
+
+    Alpaca occasionally drops idle connections. Retrying with a fresh socket
+    almost always succeeds within 1-2 attempts. Only apply to idempotent reads;
+    do NOT apply to submit_order (would risk double-fire without client_order_id).
+    """
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            last = None
+            for attempt in range(retries + 1):
+                try:
+                    return fn(*args, **kwargs)
+                except RequestsConnectionError as e:
+                    last = e
+                    if attempt < retries:
+                        logger.warning(
+                            "%s connection error (attempt %d/%d): %s — retrying in %.1fs",
+                            fn.__name__, attempt + 1, retries + 1, e, delay,
+                        )
+                        time.sleep(delay)
+            raise last
+        return wrapper
+    return decorator
 
 
 @dataclass
@@ -56,6 +86,7 @@ def submit_order(request: OrderRequest, ticker: str) -> OrderResult:
     )
 
 
+@_retry_on_connection_error()
 def get_order_status(alpaca_order_id: str) -> dict:
     client = _get_trading_client()
     order = client.get_order_by_id(alpaca_order_id)
@@ -67,6 +98,7 @@ def get_order_status(alpaca_order_id: str) -> dict:
     return result
 
 
+@_retry_on_connection_error()
 def get_position(ticker: str) -> int:
     client = _get_trading_client()
     try:
@@ -78,6 +110,7 @@ def get_position(ticker: str) -> int:
         raise
 
 
+@_retry_on_connection_error()
 def get_account() -> dict:
     client = _get_trading_client()
     account = client.get_account()
@@ -87,6 +120,7 @@ def get_account() -> dict:
     }
 
 
+@_retry_on_connection_error()
 def list_recent_orders(ticker: str, lookback_days: int = 7) -> list:
     """Return Alpaca orders for ticker across all statuses within lookback window."""
     client = _get_trading_client()
