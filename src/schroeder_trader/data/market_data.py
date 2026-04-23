@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timedelta
 
 import pandas as pd
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -33,6 +34,9 @@ def fetch_daily_bars(ticker: str, days: int = 365) -> pd.DataFrame:
         timeframe=TimeFrame.Day,
         start=start,
         end=end,
+        # Free Alpaca tier can't query recent SIP data; IEX feed has full
+        # SPY coverage and works for all account tiers.
+        feed=DataFeed.IEX,
     )
     bars = client.get_stock_bars(request)
     df = bars.df
