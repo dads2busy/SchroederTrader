@@ -19,7 +19,12 @@ _PIPELINE_DEADLINE_SECONDS = 600
 # DNS backoff schedule (seconds before attempts 1..N). Handles the
 # wake-from-sleep case where launchd fires before the network is ready.
 _NETWORK_READY_BACKOFFS = [0, 15, 30, 45]
-_NETWORK_READY_HOST = "paper-api.alpaca.markets"
+# Probe both Alpaca (trade/data) and Gmail SMTP (alerts). A TCP connect on
+# the production port proves DNS + routing, not just name resolution.
+_NETWORK_READY_HOSTS = [
+    ("paper-api.alpaca.markets", 443),
+    ("smtp.gmail.com", 465),
+]
 
 import numpy as np
 import pandas as pd
@@ -195,8 +200,12 @@ def _run_pipeline_inner(conn) -> None:
                 cwd=str(PROJECT_ROOT), capture_output=True, timeout=120,
             )
             if result.returncode != 0:
-                stderr_snippet = (result.stderr or b"").decode(errors="replace")[-200:]
-                logger.warning("External feature download failed (rc=%d): %s", result.returncode, stderr_snippet)
+                stdout_snippet = (result.stdout or b"").decode(errors="replace")[-500:]
+                stderr_snippet = (result.stderr or b"").decode(errors="replace")[-500:]
+                logger.warning(
+                    "External feature download failed (rc=%d)\nstderr: %s\nstdout: %s",
+                    result.returncode, stderr_snippet, stdout_snippet,
+                )
         except subprocess.TimeoutExpired:
             logger.warning("External feature download timed out after 120s, using cached data")
         except Exception:
@@ -478,17 +487,21 @@ def _run_pipeline_inner(conn) -> None:
         except Exception:
             logger.exception("Failed to send LLM failure alert")
 
-    # Send daily summary (with LLM report if available, plain otherwise)
-    send_daily_summary(
-        portfolio_value=account["portfolio_value"],
-        cash=account["cash"],
-        position_qty=position_qty,
-        signal=signal.value,
-        sma_50=sma_50,
-        sma_200=sma_200,
-        oracle_responses=oracle_responses,
-        llm_report=llm_report,
-    )
+    # Send daily summary (non-fatal — pipeline is complete; don't let an
+    # SMTP hang trigger a second SMTP call via the outer error handler)
+    try:
+        send_daily_summary(
+            portfolio_value=account["portfolio_value"],
+            cash=account["cash"],
+            position_qty=position_qty,
+            signal=signal.value,
+            sma_50=sma_50,
+            sma_200=sma_200,
+            oracle_responses=oracle_responses,
+            llm_report=llm_report,
+        )
+    except Exception:
+        logger.exception("Daily summary send failed (non-fatal, pipeline already complete)")
 
     logger.info("Pipeline complete")
 
@@ -499,8 +512,13 @@ def _deadline_handler(signum, frame):
     )
 
 
-def _wait_for_network(host: str = _NETWORK_READY_HOST) -> None:
-    """Block until DNS resolves for host; handles launchd-after-wake DNS lag."""
+def _wait_for_network(hosts: list[tuple[str, int]] = _NETWORK_READY_HOSTS) -> None:
+    """Block until TCP connect succeeds to each host:port.
+
+    Proves DNS + routing together (gethostbyname can succeed while routing
+    is still converging after wake-from-sleep). OSError covers gaierror,
+    socket.timeout, ConnectionRefusedError, and "No route to host".
+    """
     last_error = None
     for i, delay in enumerate(_NETWORK_READY_BACKOFFS):
         if delay > 0:
@@ -510,15 +528,17 @@ def _wait_for_network(host: str = _NETWORK_READY_HOST) -> None:
             )
             time.sleep(delay)
         try:
-            socket.gethostbyname(host)
+            for host, port in hosts:
+                with socket.create_connection((host, port), timeout=5):
+                    pass
             if i > 0:
                 logger.info("Network ready after %d retries", i)
             return
-        except socket.gaierror as exc:
+        except OSError as exc:
             last_error = exc
     raise RuntimeError(
-        f"DNS resolution failed for {host} after "
-        f"{len(_NETWORK_READY_BACKOFFS)} attempts: {last_error}"
+        f"Network unreachable after {len(_NETWORK_READY_BACKOFFS)} attempts "
+        f"(last: {type(last_error).__name__}: {last_error})"
     )
 
 

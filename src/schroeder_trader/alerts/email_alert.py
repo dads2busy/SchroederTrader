@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
+_SMTP_TIMEOUT = 30  # Explicit timeout so a hung Gmail connection can't stall the pipeline.
 
 
 def _send_email(subject: str, body: str) -> None:
@@ -19,7 +20,7 @@ def _send_email(subject: str, body: str) -> None:
         msg["To"] = ALERT_EMAIL_TO
         msg.set_content(body)
 
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as smtp:
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=_SMTP_TIMEOUT) as smtp:
             smtp.login(ALERT_EMAIL_FROM, ALERT_EMAIL_APP_PASSWORD)
             smtp.send_message(msg)
 

@@ -165,6 +165,23 @@ def test_send_daily_summary_includes_oracle_block(mock_smtp_cls):
 
 
 @patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
+def test_send_email_passes_explicit_timeout(mock_smtp_cls):
+    mock_smtp = MagicMock()
+    mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_smtp)
+    mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+    send_trade_alert(
+        action="BUY", ticker="SPY", quantity=1,
+        portfolio_value=100.0, cash=0.0, sma_50=0.0, sma_200=0.0,
+    )
+
+    # SMTP_SSL(host, port, timeout=30) — timeout must be present
+    kwargs = mock_smtp_cls.call_args.kwargs
+    assert "timeout" in kwargs
+    assert kwargs["timeout"] == 30
+
+
+@patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
 def test_send_daily_summary_no_oracle_block_when_empty(mock_smtp_cls):
     mock_smtp = MagicMock()
     mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_smtp)
