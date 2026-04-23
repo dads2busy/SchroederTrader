@@ -81,6 +81,27 @@ def send_error_alert(error_type: str, details: str) -> None:
     _send_email(subject, body)
 
 
+def _format_oracle_block(oracle_responses: list) -> str:
+    """Build a structured comparison block from a list of OracleResponse objects."""
+    if not oracle_responses:
+        return ""
+    lines = [f"{'—' * 40}", "LLM Oracle Comparison:"]
+    for resp in oracle_responses:
+        label = f"{resp.provider.upper()} ({resp.model})"
+        if getattr(resp, "error", None):
+            lines.append(f"{label}: ERROR — {resp.error}")
+            continue
+        lines.append(
+            f"{label}: {resp.action}  target={resp.target_exposure:.2f}  "
+            f"({resp.confidence} conf, regime={resp.regime_assessment})"
+        )
+        if resp.key_drivers:
+            lines.append(f"  drivers: {', '.join(resp.key_drivers)}")
+        if resp.reasoning:
+            lines.append(f"  reasoning: {resp.reasoning}")
+    return "\n".join(lines) + "\n"
+
+
 def send_daily_summary(
     portfolio_value: float,
     cash: float,
@@ -89,7 +110,9 @@ def send_daily_summary(
     sma_50: float,
     sma_200: float,
     llm_report: str | None = None,
+    oracle_responses: list | None = None,
 ) -> None:
+    oracle_block = _format_oracle_block(oracle_responses or [])
     if llm_report:
         subject = f"[SchroederTrader] Daily Report — Portfolio: ${portfolio_value:,.0f}"
         body = (
@@ -100,6 +123,8 @@ def send_daily_summary(
             f"Cash: ${cash:,.2f} | Position: {position_qty} shares SPY\n"
             f"SMA 50: {sma_50:.2f} | SMA 200: {sma_200:.2f}\n"
         )
+        if oracle_block:
+            body += f"\n{oracle_block}"
     else:
         subject = f"[SchroederTrader] Daily run complete - Portfolio: ${portfolio_value:,.0f}"
         body = (
@@ -112,4 +137,6 @@ def send_daily_summary(
             f"SMA 50: {sma_50:.2f}\n"
             f"SMA 200: {sma_200:.2f}\n"
         )
+        if oracle_block:
+            body += f"\n{oracle_block}"
     _send_email(subject, body)

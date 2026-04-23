@@ -430,6 +430,7 @@ def _run_pipeline_inner(conn) -> None:
     log_portfolio(conn, now, account["cash"], position_qty, position_value, account["portfolio_value"])
 
     # Step 11: LLM oracle shadow (Claude + ChatGPT head-to-head, non-fatal)
+    oracle_responses = []
     try:
         recent_closes = df["close"].tail(20).astype(float).tolist()
         oracle_input = OracleInput(
@@ -439,7 +440,8 @@ def _run_pipeline_inner(conn) -> None:
             position_qty=position_qty,
             portfolio_value=account["portfolio_value"],
         )
-        for resp in query_all(oracle_input):
+        oracle_responses = query_all(oracle_input)
+        for resp in oracle_responses:
             log_llm_signal(
                 conn, now, TICKER, close_price,
                 provider=resp.provider, model=resp.model,
@@ -481,6 +483,7 @@ def _run_pipeline_inner(conn) -> None:
         signal=signal.value,
         sma_50=sma_50,
         sma_200=sma_200,
+        oracle_responses=oracle_responses,
         llm_report=llm_report,
     )
 

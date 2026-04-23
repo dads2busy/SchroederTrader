@@ -119,3 +119,65 @@ def test_send_daily_summary_without_llm_report(mock_smtp_cls):
     sent_msg = mock_smtp.send_message.call_args[0][0]
     body = sent_msg.get_content()
     assert "Daily Summary" in body
+
+
+@patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
+def test_send_daily_summary_includes_oracle_block(mock_smtp_cls):
+    from schroeder_trader.agents.llm_oracle import OracleResponse
+
+    mock_smtp = MagicMock()
+    mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_smtp)
+    mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+    oracles = [
+        OracleResponse(
+            provider="claude", model="claude-opus-4-7",
+            action="BUY", target_exposure=0.95, confidence="HIGH",
+            regime_assessment="BULL",
+            key_drivers=["momentum", "earnings"], reasoning="trend intact",
+            raw_response="",
+        ),
+        OracleResponse(
+            provider="openai", model="gpt-5.4",
+            action="HOLD", target_exposure=0.80, confidence="MEDIUM",
+            regime_assessment="CHOPPY",
+            key_drivers=[], reasoning="",
+            raw_response="", error="TimeoutError",
+        ),
+    ]
+
+    send_daily_summary(
+        portfolio_value=100000.0,
+        cash=1965.0,
+        position_qty=141,
+        signal="HOLD",
+        sma_50=683.0,
+        sma_200=660.0,
+        llm_report="System says BUY.",
+        oracle_responses=oracles,
+    )
+    body = mock_smtp.send_message.call_args[0][0].get_content()
+    assert "LLM Oracle Comparison" in body
+    assert "CLAUDE (claude-opus-4-7): BUY" in body
+    assert "target=0.95" in body
+    assert "momentum" in body
+    assert "OPENAI (gpt-5.4): ERROR" in body
+
+
+@patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
+def test_send_daily_summary_no_oracle_block_when_empty(mock_smtp_cls):
+    mock_smtp = MagicMock()
+    mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_smtp)
+    mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+    send_daily_summary(
+        portfolio_value=100000.0,
+        cash=100000.0,
+        position_qty=0,
+        signal="HOLD",
+        sma_50=683.0,
+        sma_200=660.0,
+        llm_report="System says HOLD.",
+    )
+    body = mock_smtp.send_message.call_args[0][0].get_content()
+    assert "LLM Oracle Comparison" not in body
