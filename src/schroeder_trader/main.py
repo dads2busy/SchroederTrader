@@ -15,7 +15,12 @@ from pathlib import Path
 _SOCKET_TIMEOUT_SECONDS = 60
 # Wall-clock ceiling for the full pipeline. If anything blocks past this,
 # SIGALRM raises TimeoutError and the main() handler sends an alert.
-_PIPELINE_DEADLINE_SECONDS = 600
+# Budget breakdown of the slow but healthy path:
+#   network-ready retries (0-90s) + feature subprocess (≤120s) + 600-day bar
+#   fetch with retries (≤180s) + Claude oracle with web search (≤120s) +
+#   OpenAI oracle with web search (≤120s) + daily-report Claude (≤60s) +
+#   SMTP (≤30s) = ~720s worst case before padding. 900s gives headroom.
+_PIPELINE_DEADLINE_SECONDS = 900
 # DNS backoff schedule (seconds before attempts 1..N). Handles the
 # wake-from-sleep case where launchd fires before the network is ready.
 _NETWORK_READY_BACKOFFS = [0, 15, 30, 45]
