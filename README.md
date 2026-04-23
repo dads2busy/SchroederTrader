@@ -49,6 +49,40 @@ Modular pipeline: data → strategy → risk → execution → storage → alert
 | `storage/trade_log.py` | SQLite trade logging |
 | `alerts/email_alert.py` | Gmail notifications |
 
+## Running on GitHub Actions
+
+State is persisted as CSV files under `data/` and committed back to the repo
+on each run. The workflow at `.github/workflows/daily.yml` fires Mon-Fri at
+16:30 ET (two cron entries cover EDT/EST).
+
+### Required repository secrets
+
+Settings → Secrets and variables → Actions → New repository secret:
+
+| Name | Value |
+|---|---|
+| `ALPACA_API_KEY` | Alpaca paper API key |
+| `ALPACA_SECRET_KEY` | Alpaca paper API secret |
+| `ALPACA_BASE_URL` | `https://paper-api.alpaca.markets` |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `ALERT_EMAIL_FROM` | Gmail address |
+| `ALERT_EMAIL_TO` | Destination for daily report |
+| `ALERT_EMAIL_APP_PASSWORD` | 16-char Gmail app password |
+
+### Manual test run
+
+Actions tab → `daily` workflow → Run workflow. Check logs and wait for the
+commit on `main` with the day's state update.
+
+### Disabling the macOS launchd job
+
+Once GitHub Actions is verified, disable the local cron:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.schroedertrader.daily.plist
+```
+
 ## Phase Roadmap
 
 1. **SMA crossover baseline** (current)

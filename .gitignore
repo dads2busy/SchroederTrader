@@ -19,8 +19,8 @@ logs/
 # OS
 .DS_Store
 
-# ML models
-models/
+# ML models: tracked so GitHub Actions runners have them on cold start.
+# These are small (~10KB each) and versioned with the code.
 
 # Worktrees
 .worktrees/

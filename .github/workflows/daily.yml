@@ -1,0 +1,81 @@
+name: daily
+
+on:
+  schedule:
+    # 16:30 ET, Mon-Fri. Two cron entries to cover EDT (Mar-Nov) and EST
+    # (Nov-Mar). During transition weeks both fire; the pipeline's own
+    # is_market_open_today + portfolio-based idempotency handle duplicates.
+    - cron: '30 20 * * 1-5'   # 16:30 EDT
+    - cron: '30 21 * * 1-5'   # 16:30 EST
+  workflow_dispatch: {}
+
+# Never run two pipelines at once — they'd race on the git push back.
+concurrency:
+  group: trading-pipeline
+  cancel-in-progress: false
+
+# Runner needs write access to commit state CSVs back to the repo.
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Use GITHUB_TOKEN for the push; persist-credentials is true by
+          # default but we spell it out for clarity.
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Set up uv + Python 3.12
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run pipeline
+        id: pipeline
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_BASE_URL: ${{ secrets.ALPACA_BASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_APP_PASSWORD: ${{ secrets.ALERT_EMAIL_APP_PASSWORD }}
+        run: uv run python -m schroeder_trader.main
+
+      # Commit state regardless of pipeline outcome — partial state (e.g. a
+      # signal row written before a crash) is still useful and reconciliation
+      # on the next run depends on it.
+      - name: Commit state
+        if: always()
+        run: |
+          git config user.name  "schroedertrader-bot"
+          git config user.email "bot@schroedertrader.local"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "No state changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: state $(date -u +%Y-%m-%d)"
+          # Pull-rebase before push in case another workflow raced us.
+          for attempt in 1 2 3; do
+            if git pull --rebase --autostash origin "$GITHUB_REF_NAME" && git push; then
+              echo "Pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; retrying in 5s"
+            sleep 5
+          done
+          echo "Failed to push state after 3 attempts" >&2
+          exit 1
