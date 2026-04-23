@@ -49,11 +49,9 @@ def test_pipeline_hold_signal(
     run_pipeline(db_path=db_path)
 
     mock_summary.assert_called_once()
-    import sqlite3
-    conn = sqlite3.connect(str(db_path))
-    row = conn.execute("SELECT signal FROM signals").fetchone()
-    assert row[0] == "HOLD"
-    conn.close()
+    import pandas as pd
+    signals = pd.read_csv(tmp_path / "signals.csv")
+    assert signals.iloc[0]["signal"] == "HOLD"
 
 
 @patch("schroeder_trader.main.get_portfolio_by_date")
@@ -113,12 +111,10 @@ def test_pipeline_shadow_composite_skips_when_no_model(
 
     mock_summary.assert_called_once()
 
-    import sqlite3
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    shadow_count = conn.execute("SELECT COUNT(*) FROM shadow_signals").fetchone()[0]
-    assert shadow_count == 0
-    conn.close()
+    shadow_csv = tmp_path / "shadow_signals.csv"
+    if shadow_csv.exists():
+        import pandas as pd
+        assert len(pd.read_csv(shadow_csv)) == 0
 
 
 @patch("schroeder_trader.main.load_model")
@@ -154,8 +150,6 @@ def test_pipeline_shadow_exception_does_not_affect_sma(
 
     # SMA pipeline should have completed
     mock_summary.assert_called_once()
-    import sqlite3
-    conn = sqlite3.connect(str(db_path))
-    row = conn.execute("SELECT signal FROM signals").fetchone()
-    assert row[0] == "HOLD"
-    conn.close()
+    import pandas as pd
+    signals = pd.read_csv(tmp_path / "signals.csv")
+    assert signals.iloc[0]["signal"] == "HOLD"

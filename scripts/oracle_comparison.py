@@ -12,9 +12,9 @@ Usage:
     uv run python scripts/oracle_comparison.py
 """
 
-import sqlite3
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
@@ -27,24 +27,30 @@ _SYSTEM_TARGET_BY_SIGNAL = {"BUY": 0.98, "SELL": 0.0}
 
 
 def _to_et_date(ts_series: pd.Series) -> pd.Series:
-    ts = pd.to_datetime(ts_series, utc=True)
+    ts = pd.to_datetime(ts_series, utc=True, format="ISO8601")
     return ts.dt.tz_convert("America/New_York").dt.date
 
 
-def load_llm_targets(conn) -> pd.DataFrame:
-    df = pd.read_sql(
-        "SELECT timestamp, provider, target_exposure FROM llm_shadow_signals "
-        "WHERE target_exposure IS NOT NULL AND error IS NULL",
-        conn,
-    )
+def _read_csv(table: str) -> pd.DataFrame:
+    path = Path(DB_PATH).parent / f"{table}.csv"
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    return pd.read_csv(path)
+
+
+def load_llm_targets() -> pd.DataFrame:
+    df = _read_csv("llm_shadow_signals")
+    if df.empty:
+        return df.assign(date=pd.Series(dtype="object"))
+    df = df[df["target_exposure"].notna() & df["error"].isna()]
     if df.empty:
         return df.assign(date=pd.Series(dtype="object"))
     df["date"] = _to_et_date(df["timestamp"])
     return df[["date", "provider", "target_exposure"]].drop_duplicates(["date", "provider"], keep="last")
 
 
-def load_system_targets(conn) -> pd.DataFrame:
-    df = pd.read_sql("SELECT timestamp, ml_signal FROM shadow_signals", conn)
+def load_system_targets() -> pd.DataFrame:
+    df = _read_csv("shadow_signals")
     if df.empty:
         return df.assign(date=pd.Series(dtype="object"), target_exposure=pd.Series(dtype=float))
     df["date"] = _to_et_date(df["timestamp"])
@@ -82,10 +88,8 @@ def summary_stats(series: pd.Series) -> dict:
 
 
 def main():
-    conn = sqlite3.connect(DB_PATH)
-    llm_df = load_llm_targets(conn)
-    sys_df = load_system_targets(conn)
-    conn.close()
+    llm_df = load_llm_targets()
+    sys_df = load_system_targets()
 
     all_dates = pd.concat([llm_df["date"], sys_df["date"]]) if not llm_df.empty or not sys_df.empty else pd.Series(dtype="object")
     if all_dates.empty:

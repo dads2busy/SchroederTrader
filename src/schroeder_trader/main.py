@@ -74,6 +74,8 @@ from schroeder_trader.storage.trade_log import (
     log_shadow_signal,
     get_shadow_signals,
     log_llm_signal,
+    get_latest_trailing_stop_state,
+    get_shadow_signal_timestamps,
 )
 from schroeder_trader.strategy.feature_engineer import FeaturePipeline
 from schroeder_trader.strategy.xgboost_classifier import load_model
@@ -105,11 +107,8 @@ def _run_pipeline_inner(conn) -> None:
     now = datetime.now(timezone.utc)
     today = datetime.now(_ET).strftime("%Y-%m-%d")
 
-    # Initialize trailing stop from DB state
-    ts_row = conn.execute(
-        "SELECT high_water_mark, trailing_stop_triggered, timestamp FROM shadow_signals "
-        "WHERE high_water_mark IS NOT NULL ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    # Initialize trailing stop from persisted state
+    ts_row = get_latest_trailing_stop_state(conn)
     if ts_row and ts_row["trailing_stop_triggered"]:
         stop_date = datetime.fromisoformat(ts_row["timestamp"]).date()
         trailing_stop = TrailingStop(
@@ -335,10 +334,8 @@ def _run_pipeline_inner(conn) -> None:
 
                     # Evaluate trailing stop
                     ts_trading_dates = [
-                        datetime.fromisoformat(r["timestamp"]).date()
-                        for r in conn.execute(
-                            "SELECT timestamp FROM shadow_signals ORDER BY id"
-                        ).fetchall()
+                        datetime.fromisoformat(ts).date()
+                        for ts in get_shadow_signal_timestamps(conn)
                     ]
                     today_date = datetime.now(_ET).date()
                     ts_triggered = trailing_stop.update(

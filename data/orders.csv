@@ -1,0 +1,2 @@
+id,signal_id,alpaca_order_id,timestamp,ticker,action,quantity,fill_price,fill_timestamp,status,signal_close_price,slippage
+1,18,675cb1f8-d229-4f1f-b317-00c02ab80a50,2026-04-14T20:30:26.375467+00:00,SPY,BUY,141,695.280851,2026-04-15T13:32:11.218003+00:00,FILLED,694.46,0.8199999999999363

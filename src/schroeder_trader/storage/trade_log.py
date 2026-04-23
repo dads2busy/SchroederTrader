@@ -1,113 +1,30 @@
-import sqlite3
+"""CSV-backed replacement for the old SQLite trade log.
+
+Public function signatures match the original SQLite version: callers pass a
+store object as the first argument (previously `sqlite3.Connection`, now
+`CsvStore`) and the rest of the code path is unchanged.
+"""
+
+from __future__ import annotations
+
+import json
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 
-def init_db(db_path: Path) -> sqlite3.Connection:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            close_price REAL NOT NULL,
-            sma_50 REAL NOT NULL,
-            sma_200 REAL NOT NULL,
-            signal TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            signal_id INTEGER NOT NULL,
-            alpaca_order_id TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            action TEXT NOT NULL,
-            quantity INTEGER NOT NULL,
-            fill_price REAL,
-            fill_timestamp TEXT,
-            status TEXT NOT NULL,
-            FOREIGN KEY (signal_id) REFERENCES signals(id)
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS portfolio (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            cash REAL NOT NULL,
-            position_qty INTEGER NOT NULL,
-            position_value REAL NOT NULL,
-            total_value REAL NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS llm_shadow_signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            close_price REAL NOT NULL,
-            provider TEXT NOT NULL,
-            model TEXT NOT NULL,
-            action TEXT NOT NULL,
-            target_exposure REAL,
-            confidence TEXT,
-            regime_assessment TEXT,
-            key_drivers TEXT,
-            reasoning TEXT,
-            raw_response TEXT,
-            error TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS shadow_signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            ticker TEXT NOT NULL,
-            close_price REAL NOT NULL,
-            predicted_class INTEGER,
-            predicted_proba TEXT,
-            ml_signal TEXT NOT NULL,
-            sma_signal TEXT NOT NULL,
-            regime TEXT,
-            signal_source TEXT,
-            bear_day_count INTEGER,
-            kelly_fraction REAL,
-            kelly_qty INTEGER,
-            high_water_mark REAL,
-            trailing_stop_triggered INTEGER
-        )
-    """)
-    # Defensive migration for existing databases missing new columns
-    for col, col_type in [
-        ("regime", "TEXT"), ("signal_source", "TEXT"), ("bear_day_count", "INTEGER"),
-        ("kelly_fraction", "REAL"), ("kelly_qty", "INTEGER"),
-        ("high_water_mark", "REAL"), ("trailing_stop_triggered", "INTEGER"),
-    ]:
-        try:
-            conn.execute(f"ALTER TABLE shadow_signals ADD COLUMN {col} {col_type}")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-    for col, col_type in [
-        ("signal_close_price", "REAL"), ("slippage", "REAL"),
-    ]:
-        try:
-            conn.execute(f"ALTER TABLE orders ADD COLUMN {col} {col_type}")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-    for col, col_type in [("target_exposure", "REAL")]:
-        try:
-            conn.execute(f"ALTER TABLE llm_shadow_signals ADD COLUMN {col} {col_type}")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-    conn.commit()
-    return conn
+from schroeder_trader.storage.csv_store import CsvStore
+
+
+def init_db(db_path: Path) -> CsvStore:
+    """Open the CSV-backed store. Accepts the legacy db_path and uses its
+    parent directory as the data root so existing callers don't change."""
+    root = Path(db_path).parent
+    return CsvStore(root)
 
 
 def log_signal(
-    conn: sqlite3.Connection,
+    store: CsvStore,
     timestamp: datetime,
     ticker: str,
     close_price: float,
@@ -115,16 +32,18 @@ def log_signal(
     sma_200: float,
     signal: str,
 ) -> int:
-    cursor = conn.execute(
-        "INSERT INTO signals (timestamp, ticker, close_price, sma_50, sma_200, signal) VALUES (?, ?, ?, ?, ?, ?)",
-        (timestamp.isoformat(), ticker, close_price, sma_50, sma_200, signal),
-    )
-    conn.commit()
-    return cursor.lastrowid
+    return store.append("signals", {
+        "timestamp": timestamp.isoformat(),
+        "ticker": ticker,
+        "close_price": close_price,
+        "sma_50": sma_50,
+        "sma_200": sma_200,
+        "signal": signal,
+    })
 
 
 def log_order(
-    conn: sqlite3.Connection,
+    store: CsvStore,
     signal_id: int,
     alpaca_order_id: str,
     timestamp: datetime,
@@ -134,68 +53,78 @@ def log_order(
     status: str,
     signal_close_price: float | None = None,
 ) -> int:
-    cursor = conn.execute(
-        "INSERT INTO orders (signal_id, alpaca_order_id, timestamp, ticker, action, quantity, status, signal_close_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (signal_id, alpaca_order_id, timestamp.isoformat(), ticker, action, quantity, status, signal_close_price),
-    )
-    conn.commit()
-    return cursor.lastrowid
+    return store.append("orders", {
+        "signal_id": signal_id,
+        "alpaca_order_id": alpaca_order_id,
+        "timestamp": timestamp.isoformat(),
+        "ticker": ticker,
+        "action": action,
+        "quantity": quantity,
+        "fill_price": None,
+        "fill_timestamp": None,
+        "status": status,
+        "signal_close_price": signal_close_price,
+        "slippage": None,
+    })
 
 
 def log_portfolio(
-    conn: sqlite3.Connection,
+    store: CsvStore,
     timestamp: datetime,
     cash: float,
     position_qty: int,
     position_value: float,
     total_value: float,
 ) -> int:
-    cursor = conn.execute(
-        "INSERT INTO portfolio (timestamp, cash, position_qty, position_value, total_value) VALUES (?, ?, ?, ?, ?)",
-        (timestamp.isoformat(), cash, position_qty, position_value, total_value),
-    )
-    conn.commit()
-    return cursor.lastrowid
+    return store.append("portfolio", {
+        "timestamp": timestamp.isoformat(),
+        "cash": cash,
+        "position_qty": position_qty,
+        "position_value": position_value,
+        "total_value": total_value,
+    })
 
 
-def get_signal_by_date(conn: sqlite3.Connection, date_str: str) -> dict | None:
-    row = conn.execute(
-        "SELECT * FROM signals WHERE timestamp LIKE ?", (f"{date_str}%",)
-    ).fetchone()
-    if row is None:
+def get_signal_by_date(store: CsvStore, date_str: str) -> dict | None:
+    df = store.read("signals")
+    if df.empty:
         return None
-    return dict(row)
-
-
-def get_portfolio_by_date(conn: sqlite3.Connection, date_str: str) -> dict | None:
-    """Used for run-level idempotency: a portfolio snapshot only exists after
-    a full pipeline run reached step 10, so its presence means today is done.
-    A partial run that crashed earlier (e.g. between log_signal and log_order)
-    leaves no portfolio row, which lets the next invocation re-run cleanly."""
-    row = conn.execute(
-        "SELECT * FROM portfolio WHERE timestamp LIKE ?", (f"{date_str}%",)
-    ).fetchone()
-    if row is None:
+    matches = df[df["timestamp"].astype(str).str.startswith(date_str)]
+    if matches.empty:
         return None
-    return dict(row)
+    return matches.iloc[0].to_dict()
 
 
-def get_pending_orders(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM orders WHERE status = 'SUBMITTED'"
-    ).fetchall()
-    return [dict(row) for row in rows]
+def get_portfolio_by_date(store: CsvStore, date_str: str) -> dict | None:
+    df = store.read("portfolio")
+    if df.empty:
+        return None
+    matches = df[df["timestamp"].astype(str).str.startswith(date_str)]
+    if matches.empty:
+        return None
+    return matches.iloc[0].to_dict()
 
 
-def get_order_by_alpaca_id(conn: sqlite3.Connection, alpaca_order_id: str) -> dict | None:
-    row = conn.execute(
-        "SELECT * FROM orders WHERE alpaca_order_id = ?", (alpaca_order_id,)
-    ).fetchone()
-    return dict(row) if row else None
+def get_pending_orders(store: CsvStore) -> list[dict]:
+    df = store.read("orders")
+    if df.empty:
+        return []
+    pending = df[df["status"] == "SUBMITTED"]
+    return [_row_to_dict(r) for _, r in pending.iterrows()]
+
+
+def get_order_by_alpaca_id(store: CsvStore, alpaca_order_id: str) -> dict | None:
+    df = store.read("orders")
+    if df.empty:
+        return None
+    matches = df[df["alpaca_order_id"] == alpaca_order_id]
+    if matches.empty:
+        return None
+    return _row_to_dict(matches.iloc[0])
 
 
 def insert_reconciled_order(
-    conn: sqlite3.Connection,
+    store: CsvStore,
     alpaca_order_id: str,
     timestamp: datetime,
     ticker: str,
@@ -205,48 +134,54 @@ def insert_reconciled_order(
     fill_price: float | None = None,
     fill_timestamp: datetime | None = None,
 ) -> int:
-    # signal_id=0 marks the row as reconciled from Alpaca rather than originated by us.
-    cursor = conn.execute(
-        "INSERT INTO orders (signal_id, alpaca_order_id, timestamp, ticker, action, "
-        "quantity, status, fill_price, fill_timestamp) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            0, alpaca_order_id, timestamp.isoformat(), ticker, action, quantity, status,
-            fill_price, fill_timestamp.isoformat() if fill_timestamp else None,
-        ),
-    )
-    conn.commit()
-    return cursor.lastrowid
+    # signal_id=0 marks reconciled-orphan, same convention as the SQLite version
+    return store.append("orders", {
+        "signal_id": 0,
+        "alpaca_order_id": alpaca_order_id,
+        "timestamp": timestamp.isoformat(),
+        "ticker": ticker,
+        "action": action,
+        "quantity": quantity,
+        "fill_price": fill_price,
+        "fill_timestamp": fill_timestamp.isoformat() if fill_timestamp else None,
+        "status": status,
+        "signal_close_price": None,
+        "slippage": None,
+    })
 
 
 def update_order_fill(
-    conn: sqlite3.Connection,
+    store: CsvStore,
     alpaca_order_id: str,
     fill_price: float,
     fill_timestamp: datetime,
     status: str,
 ) -> None:
-    # Compute slippage if signal_close_price was recorded
-    row = conn.execute(
-        "SELECT signal_close_price, action FROM orders WHERE alpaca_order_id = ?",
-        (alpaca_order_id,),
-    ).fetchone()
+    existing = get_order_by_alpaca_id(store, alpaca_order_id)
     slippage = None
-    if row and row["signal_close_price"] is not None and fill_price > 0:
-        # Positive slippage = cost (paid more on BUY, received less on SELL)
-        if row["action"] == "BUY":
-            slippage = fill_price - row["signal_close_price"]
-        else:
-            slippage = row["signal_close_price"] - fill_price
-    conn.execute(
-        "UPDATE orders SET fill_price = ?, fill_timestamp = ?, status = ?, slippage = ? WHERE alpaca_order_id = ?",
-        (fill_price, fill_timestamp.isoformat(), status, slippage, alpaca_order_id),
+    if existing and existing.get("signal_close_price") is not None and fill_price > 0:
+        try:
+            signal_close = float(existing["signal_close_price"])
+            if existing["action"] == "BUY":
+                slippage = fill_price - signal_close
+            else:
+                slippage = signal_close - fill_price
+        except (TypeError, ValueError):
+            slippage = None
+    store.update_where(
+        "orders",
+        where={"alpaca_order_id": alpaca_order_id},
+        set_={
+            "fill_price": fill_price,
+            "fill_timestamp": fill_timestamp.isoformat(),
+            "status": status,
+            "slippage": slippage,
+        },
     )
-    conn.commit()
 
 
 def log_shadow_signal(
-    conn: sqlite3.Connection,
+    store: CsvStore,
     timestamp: datetime,
     ticker: str,
     close_price: float,
@@ -262,22 +197,35 @@ def log_shadow_signal(
     high_water_mark: float | None = None,
     trailing_stop_triggered: bool | None = None,
 ) -> int:
-    trailing_stop_int = int(trailing_stop_triggered) if trailing_stop_triggered is not None else None
-    cursor = conn.execute(
-        "INSERT INTO shadow_signals (timestamp, ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count, kelly_fraction, kelly_qty, high_water_mark, trailing_stop_triggered) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (timestamp.isoformat(), ticker, close_price, predicted_class, predicted_proba, ml_signal, sma_signal, regime, signal_source, bear_day_count, kelly_fraction, kelly_qty, high_water_mark, trailing_stop_int),
-    )
-    conn.commit()
-    return cursor.lastrowid
+    ts_int = int(trailing_stop_triggered) if trailing_stop_triggered is not None else None
+    return store.append("shadow_signals", {
+        "timestamp": timestamp.isoformat(),
+        "ticker": ticker,
+        "close_price": close_price,
+        "predicted_class": predicted_class,
+        "predicted_proba": predicted_proba,
+        "ml_signal": ml_signal,
+        "sma_signal": sma_signal,
+        "regime": regime,
+        "signal_source": signal_source,
+        "bear_day_count": bear_day_count,
+        "kelly_fraction": kelly_fraction,
+        "kelly_qty": kelly_qty,
+        "high_water_mark": high_water_mark,
+        "trailing_stop_triggered": ts_int,
+    })
 
 
-def get_shadow_signals(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute("SELECT * FROM shadow_signals ORDER BY id").fetchall()
-    return [dict(row) for row in rows]
+def get_shadow_signals(store: CsvStore) -> list[dict]:
+    df = store.read("shadow_signals")
+    if df.empty:
+        return []
+    df = df.sort_values("id")
+    return [_row_to_dict(r) for _, r in df.iterrows()]
 
 
 def log_llm_signal(
-    conn: sqlite3.Connection,
+    store: CsvStore,
     timestamp: datetime,
     ticker: str,
     close_price: float,
@@ -292,24 +240,63 @@ def log_llm_signal(
     raw_response: str | None,
     error: str | None = None,
 ) -> int:
-    import json as _json
-    cursor = conn.execute(
-        "INSERT INTO llm_shadow_signals (timestamp, ticker, close_price, provider, model, "
-        "action, target_exposure, confidence, regime_assessment, key_drivers, reasoning, raw_response, error) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            timestamp.isoformat(), ticker, close_price, provider, model,
-            action, target_exposure, confidence, regime_assessment,
-            _json.dumps(key_drivers) if key_drivers is not None else None,
-            reasoning, raw_response, error,
-        ),
-    )
-    conn.commit()
-    return cursor.lastrowid
+    return store.append("llm_shadow_signals", {
+        "timestamp": timestamp.isoformat(),
+        "ticker": ticker,
+        "close_price": close_price,
+        "provider": provider,
+        "model": model,
+        "action": action,
+        "target_exposure": target_exposure,
+        "confidence": confidence,
+        "regime_assessment": regime_assessment,
+        "key_drivers": json.dumps(key_drivers) if key_drivers is not None else None,
+        "reasoning": reasoning,
+        "raw_response": raw_response,
+        "error": error,
+    })
 
 
-def get_llm_signals(conn: sqlite3.Connection, limit: int = 60) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM llm_shadow_signals ORDER BY id DESC LIMIT ?", (limit,)
-    ).fetchall()
-    return [dict(row) for row in rows]
+def get_llm_signals(store: CsvStore, limit: int = 60) -> list[dict]:
+    df = store.read("llm_shadow_signals")
+    if df.empty:
+        return []
+    df = df.sort_values("id", ascending=False).head(limit)
+    return [_row_to_dict(r) for _, r in df.iterrows()]
+
+
+# Direct-read helpers used by main.py (replacing raw conn.execute calls).
+
+def get_latest_trailing_stop_state(store: CsvStore) -> dict | None:
+    """Most recent shadow_signals row with a non-null high_water_mark."""
+    df = store.read("shadow_signals")
+    if df.empty or "high_water_mark" not in df.columns:
+        return None
+    df = df[df["high_water_mark"].notna()]
+    if df.empty:
+        return None
+    row = df.sort_values("id", ascending=False).iloc[0]
+    return _row_to_dict(row)
+
+
+def get_shadow_signal_timestamps(store: CsvStore) -> list[str]:
+    """All timestamps in shadow_signals, ordered by id ascending.
+    Used by trailing stop for trading-date history."""
+    df = store.read("shadow_signals")
+    if df.empty:
+        return []
+    df = df.sort_values("id")
+    return df["timestamp"].astype(str).tolist()
+
+
+def _row_to_dict(row: pd.Series) -> dict:
+    """Convert a pandas row to a plain dict, normalizing NaN to None."""
+    out = {}
+    for k, v in row.to_dict().items():
+        if isinstance(v, float) and pd.isna(v):
+            out[k] = None
+        elif v is pd.NA:
+            out[k] = None
+        else:
+            out[k] = v
+    return out

@@ -1,4 +1,3 @@
-import sqlite3
 from datetime import datetime, timezone
 
 import pytest
@@ -19,47 +18,43 @@ from schroeder_trader.storage.trade_log import (
 )
 
 
-def test_init_db_creates_tables(tmp_path):
+def test_init_db_creates_store(tmp_path):
     db_path = tmp_path / "test.db"
-    conn = init_db(db_path)
-    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = {row[0] for row in cursor.fetchall()}
-    assert {"signals", "orders", "portfolio"} <= tables
-    conn.close()
+    store = init_db(db_path)
+    assert store.root == tmp_path
+    assert tmp_path.exists()
+    store.close()
 
 
 def test_log_signal(tmp_path):
-    db_path = tmp_path / "test.db"
-    conn = init_db(db_path)
+    store = init_db(tmp_path / "test.db")
     now = datetime.now(timezone.utc)
-    signal_id = log_signal(conn, now, "SPY", 523.10, 520.0, 518.0, "BUY")
+    signal_id = log_signal(store, now, "SPY", 523.10, 520.0, 518.0, "BUY")
     assert signal_id == 1
 
-    row = conn.execute("SELECT * FROM signals WHERE id = ?", (signal_id,)).fetchone()
-    assert row is not None
-    assert row[2] == "SPY"  # ticker
-    assert row[6] == "BUY"  # signal
-    conn.close()
+    df = store.read("signals")
+    assert len(df) == 1
+    assert df.iloc[0]["ticker"] == "SPY"
+    assert df.iloc[0]["signal"] == "BUY"
+    store.close()
 
 
 def test_log_order(tmp_path):
-    db_path = tmp_path / "test.db"
-    conn = init_db(db_path)
+    store = init_db(tmp_path / "test.db")
     now = datetime.now(timezone.utc)
-    signal_id = log_signal(conn, now, "SPY", 523.10, 520.0, 518.0, "BUY")
-    order_id = log_order(conn, signal_id, "alpaca-123", now, "SPY", "BUY", 45, "SUBMITTED")
+    signal_id = log_signal(store, now, "SPY", 523.10, 520.0, 518.0, "BUY")
+    order_id = log_order(store, signal_id, "alpaca-123", now, "SPY", "BUY", 45, "SUBMITTED")
     assert order_id == 1
-    conn.close()
+    store.close()
 
 
 def test_log_portfolio(tmp_path):
-    db_path = tmp_path / "test.db"
-    conn = init_db(db_path)
+    store = init_db(tmp_path / "test.db")
     now = datetime.now(timezone.utc)
-    log_portfolio(conn, now, 5000.0, 45, 23539.5, 28539.5)
-    row = conn.execute("SELECT * FROM portfolio WHERE id = 1").fetchone()
-    assert row[2] == 5000.0  # cash
-    conn.close()
+    log_portfolio(store, now, 5000.0, 45, 23539.5, 28539.5)
+    df = store.read("portfolio")
+    assert df.iloc[0]["cash"] == 5000.0
+    store.close()
 
 
 def test_get_signal_by_date_returns_none_when_missing(tmp_path):
@@ -120,15 +115,14 @@ def test_get_pending_orders(tmp_path):
 
 
 def test_update_order_fill(tmp_path):
-    db_path = tmp_path / "test.db"
-    conn = init_db(db_path)
+    conn = init_db(tmp_path / "test.db")
     now = datetime.now(timezone.utc)
     signal_id = log_signal(conn, now, "SPY", 523.10, 520.0, 518.0, "BUY")
-    order_id = log_order(conn, signal_id, "alpaca-123", now, "SPY", "BUY", 45, "SUBMITTED")
+    log_order(conn, signal_id, "alpaca-123", now, "SPY", "BUY", 45, "SUBMITTED")
     update_order_fill(conn, "alpaca-123", 523.50, now, "FILLED")
-    row = conn.execute("SELECT fill_price, status FROM orders WHERE id = ?", (order_id,)).fetchone()
-    assert row[0] == 523.50
-    assert row[1] == "FILLED"
+    df = conn.read("orders")
+    assert df.iloc[0]["fill_price"] == 523.50
+    assert df.iloc[0]["status"] == "FILLED"
     conn.close()
 
 
