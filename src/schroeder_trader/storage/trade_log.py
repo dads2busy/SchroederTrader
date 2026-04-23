@@ -167,6 +167,19 @@ def get_signal_by_date(conn: sqlite3.Connection, date_str: str) -> dict | None:
     return dict(row)
 
 
+def get_portfolio_by_date(conn: sqlite3.Connection, date_str: str) -> dict | None:
+    """Used for run-level idempotency: a portfolio snapshot only exists after
+    a full pipeline run reached step 10, so its presence means today is done.
+    A partial run that crashed earlier (e.g. between log_signal and log_order)
+    leaves no portfolio row, which lets the next invocation re-run cleanly."""
+    row = conn.execute(
+        "SELECT * FROM portfolio WHERE timestamp LIKE ?", (f"{date_str}%",)
+    ).fetchone()
+    if row is None:
+        return None
+    return dict(row)
+
+
 def get_pending_orders(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT * FROM orders WHERE status = 'SUBMITTED'"

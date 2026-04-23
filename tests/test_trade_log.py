@@ -9,6 +9,7 @@ from schroeder_trader.storage.trade_log import (
     log_order,
     log_portfolio,
     get_signal_by_date,
+    get_portfolio_by_date,
     get_pending_orders,
     update_order_fill,
     log_shadow_signal,
@@ -76,6 +77,33 @@ def test_get_signal_by_date_returns_existing(tmp_path):
     log_signal(conn, now, "SPY", 523.10, 520.0, 518.0, "HOLD")
     result = get_signal_by_date(conn, "2026-03-18")
     assert result is not None
+    conn.close()
+
+
+def test_get_portfolio_by_date_returns_none_when_missing(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+    assert get_portfolio_by_date(conn, "2026-04-23") is None
+    conn.close()
+
+
+def test_get_portfolio_by_date_returns_existing(tmp_path):
+    conn = init_db(tmp_path / "test.db")
+    now = datetime(2026, 4, 23, 20, 30, tzinfo=timezone.utc)
+    log_portfolio(conn, now, 1965.0, 141, 99929.0, 101894.0)
+    result = get_portfolio_by_date(conn, "2026-04-23")
+    assert result is not None
+    assert result["position_qty"] == 141
+    conn.close()
+
+
+def test_portfolio_idempotency_ignores_partial_signal_row(tmp_path):
+    """A signal written but no portfolio yet means the run was partial —
+    get_portfolio_by_date should still return None so the next run re-executes."""
+    conn = init_db(tmp_path / "test.db")
+    now = datetime(2026, 4, 23, 20, 30, tzinfo=timezone.utc)
+    log_signal(conn, now, "SPY", 710.14, 676.0, 667.0, "HOLD")
+    assert get_signal_by_date(conn, "2026-04-23") is not None
+    assert get_portfolio_by_date(conn, "2026-04-23") is None  # key assertion
     conn.close()
 
 

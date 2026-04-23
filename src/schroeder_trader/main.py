@@ -63,7 +63,7 @@ from schroeder_trader.storage.trade_log import (
     log_signal,
     log_order,
     log_portfolio,
-    get_signal_by_date,
+    get_portfolio_by_date,
     get_pending_orders,
     update_order_fill,
     log_shadow_signal,
@@ -161,8 +161,10 @@ def _run_pipeline_inner(conn) -> None:
         except Exception:
             logger.exception("Error checking order %s", order["alpaca_order_id"])
 
-    # Step 3: Idempotency check (after fill + reconcile so those always run)
-    existing = get_signal_by_date(conn, today)
+    # Step 3: Idempotency check keyed on portfolio snapshot (written at step 10).
+    # A partial run that crashed earlier (e.g. between log_signal and log_order)
+    # leaves no portfolio row, which lets the next invocation re-run cleanly.
+    existing = get_portfolio_by_date(conn, today)
     if existing is not None:
         logger.info("Already ran today (%s), exiting", today)
         return
@@ -407,12 +409,19 @@ def _run_pipeline_inner(conn) -> None:
     logger.info("Effective signal: %s", effective_signal.value)
 
     # Step 9: Risk evaluation + execution
-    order_request = evaluate(
-        signal=effective_signal,
-        portfolio_value=account["portfolio_value"],
-        close_price=close_price,
-        current_position_qty=position_qty,
-    )
+    # Guard against double-submit on retry: if we already have a pending order,
+    # skip trade evaluation. The fill check at step 2 has already updated any
+    # that completed, so remaining pending orders are still in flight.
+    if get_pending_orders(conn):
+        logger.info("Pending order exists; skipping trade evaluation to avoid double-submit")
+        order_request = None
+    else:
+        order_request = evaluate(
+            signal=effective_signal,
+            portfolio_value=account["portfolio_value"],
+            close_price=close_price,
+            current_position_qty=position_qty,
+        )
 
     if order_request is not None:
         result = submit_order(order_request, TICKER)

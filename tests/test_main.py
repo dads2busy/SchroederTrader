@@ -27,7 +27,7 @@ def _mock_bars_df(n: int = 250) -> pd.DataFrame:
 @patch("schroeder_trader.main.fetch_daily_bars")
 @patch("schroeder_trader.main.is_market_open_today")
 @patch("schroeder_trader.main.get_pending_orders")
-@patch("schroeder_trader.main.get_signal_by_date")
+@patch("schroeder_trader.main.get_portfolio_by_date")
 def test_pipeline_hold_signal(
     mock_signal_by_date,
     mock_pending,
@@ -56,7 +56,7 @@ def test_pipeline_hold_signal(
     conn.close()
 
 
-@patch("schroeder_trader.main.get_signal_by_date")
+@patch("schroeder_trader.main.get_portfolio_by_date")
 def test_pipeline_skips_if_already_ran(mock_signal_by_date, tmp_path):
     mock_signal_by_date.return_value = {"signal": "HOLD"}
     db_path = tmp_path / "test.db"
@@ -65,7 +65,7 @@ def test_pipeline_skips_if_already_ran(mock_signal_by_date, tmp_path):
 
 @patch("schroeder_trader.main.is_market_open_today")
 @patch("schroeder_trader.main.get_pending_orders")
-@patch("schroeder_trader.main.get_signal_by_date")
+@patch("schroeder_trader.main.get_portfolio_by_date")
 def test_pipeline_skips_if_market_closed(
     mock_signal_by_date,
     mock_pending,
@@ -87,7 +87,7 @@ def test_pipeline_skips_if_market_closed(
 @patch("schroeder_trader.main.fetch_daily_bars")
 @patch("schroeder_trader.main.is_market_open_today")
 @patch("schroeder_trader.main.get_pending_orders")
-@patch("schroeder_trader.main.get_signal_by_date")
+@patch("schroeder_trader.main.get_portfolio_by_date")
 def test_pipeline_shadow_composite_skips_when_no_model(
     mock_signal_by_date,
     mock_pending,
@@ -128,7 +128,7 @@ def test_pipeline_shadow_composite_skips_when_no_model(
 @patch("schroeder_trader.main.fetch_daily_bars")
 @patch("schroeder_trader.main.is_market_open_today")
 @patch("schroeder_trader.main.get_pending_orders")
-@patch("schroeder_trader.main.get_signal_by_date")
+@patch("schroeder_trader.main.get_portfolio_by_date")
 def test_pipeline_shadow_exception_does_not_affect_sma(
     mock_signal_by_date,
     mock_pending,
