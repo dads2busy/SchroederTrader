@@ -32,12 +32,13 @@ jobs:
           persist-credentials: true
           fetch-depth: 1
 
-      - name: Set up uv + Python 3.12
+      - name: Set up uv
         uses: astral-sh/setup-uv@v3
         with:
-          python-version: '3.12'
           enable-cache: true
 
+      # uv reads .python-version (3.12) and installs that interpreter on
+      # demand during `uv sync` — no separate actions/setup-python needed.
       - name: Install dependencies
         run: uv sync
 
