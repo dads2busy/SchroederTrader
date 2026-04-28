@@ -80,11 +80,12 @@ def test_send_trade_alert_smtp_failure_does_not_raise(mock_smtp_cls):
 
 
 @patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
-def test_send_daily_summary_with_llm_report(mock_smtp_cls):
+def test_send_daily_summary_uses_provided_body(mock_smtp_cls):
     mock_smtp = MagicMock()
     mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_smtp)
     mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
 
+    custom_body = "SchroederTrader Daily Report — 2026-04-28\nTODAY\n  SPY: $700"
     send_daily_summary(
         portfolio_value=100000.0,
         cash=100000.0,
@@ -92,17 +93,14 @@ def test_send_daily_summary_with_llm_report(mock_smtp_cls):
         signal="HOLD",
         sma_50=683.89,
         sma_200=660.36,
-        llm_report="The system recommends staying flat in BEAR regime day 14.",
+        email_body=custom_body,
     )
-    mock_smtp.send_message.assert_called_once()
-    sent_msg = mock_smtp.send_message.call_args[0][0]
-    body = sent_msg.get_content()
-    assert "staying flat" in body
-    assert "Raw Data" in body
+    body = mock_smtp.send_message.call_args[0][0].get_content()
+    assert custom_body in body
 
 
 @patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
-def test_send_daily_summary_without_llm_report(mock_smtp_cls):
+def test_send_daily_summary_falls_back_when_no_body(mock_smtp_cls):
     mock_smtp = MagicMock()
     mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_smtp)
     mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
@@ -115,10 +113,8 @@ def test_send_daily_summary_without_llm_report(mock_smtp_cls):
         sma_50=683.89,
         sma_200=660.36,
     )
-    mock_smtp.send_message.assert_called_once()
-    sent_msg = mock_smtp.send_message.call_args[0][0]
-    body = sent_msg.get_content()
-    assert "Daily Summary" in body
+    body = mock_smtp.send_message.call_args[0][0].get_content()
+    assert "fallback" in body
 
 
 @patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
@@ -146,6 +142,7 @@ def test_send_daily_summary_includes_oracle_block(mock_smtp_cls):
         ),
     ]
 
+    # When no email_body is supplied, the fallback embeds the oracle block
     send_daily_summary(
         portfolio_value=100000.0,
         cash=1965.0,
@@ -153,7 +150,6 @@ def test_send_daily_summary_includes_oracle_block(mock_smtp_cls):
         signal="HOLD",
         sma_50=683.0,
         sma_200=660.0,
-        llm_report="System says BUY.",
         oracle_responses=oracles,
     )
     body = mock_smtp.send_message.call_args[0][0].get_content()
@@ -194,7 +190,7 @@ def test_send_daily_summary_no_oracle_block_when_empty(mock_smtp_cls):
         signal="HOLD",
         sma_50=683.0,
         sma_200=660.0,
-        llm_report="System says HOLD.",
+        email_body="some custom body without an oracle section",
     )
     body = mock_smtp.send_message.call_args[0][0].get_content()
     assert "LLM Oracle Comparison" not in body

@@ -110,33 +110,28 @@ def send_daily_summary(
     signal: str,
     sma_50: float,
     sma_200: float,
-    llm_report: str | None = None,
     oracle_responses: list | None = None,
+    email_body: str | None = None,
 ) -> None:
-    oracle_block = _format_oracle_block(oracle_responses or [])
-    if llm_report:
-        subject = f"[SchroederTrader] Daily Report — Portfolio: ${portfolio_value:,.0f}"
-        body = (
-            f"{llm_report}\n\n"
-            f"{'—' * 40}\n"
-            f"Raw Data:\n"
-            f"Signal: {signal} | Portfolio: ${portfolio_value:,.2f}\n"
-            f"Cash: ${cash:,.2f} | Position: {position_qty} shares SPY\n"
-            f"SMA 50: {sma_50:.2f} | SMA 200: {sma_200:.2f}\n"
-        )
-        if oracle_block:
-            body += f"\n{oracle_block}"
+    """Send the daily summary email.
+
+    If `email_body` is provided (the structured report from reports/daily_email.py),
+    use it as-is. Otherwise fall back to a minimal raw-data summary so the
+    pipeline still emails something even if the report builder fails.
+    """
+    subject = f"[SchroederTrader] Daily Report — Portfolio: ${portfolio_value:,.0f}"
+    if email_body:
+        body = email_body
     else:
-        subject = f"[SchroederTrader] Daily run complete - Portfolio: ${portfolio_value:,.0f}"
+        oracle_block = _format_oracle_block(oracle_responses or [])
         body = (
-            f"Daily Summary\n"
+            f"Daily Summary (fallback — structured body unavailable)\n"
             f"{'=' * 40}\n"
             f"Signal: {signal}\n"
             f"Portfolio Value: ${portfolio_value:,.2f}\n"
             f"Cash: ${cash:,.2f}\n"
-            f"Position: {position_qty} shares SPY\n\n"
-            f"SMA 50: {sma_50:.2f}\n"
-            f"SMA 200: {sma_200:.2f}\n"
+            f"Position: {position_qty} shares SPY\n"
+            f"SMA 50: {sma_50:.2f} | SMA 200: {sma_200:.2f}\n"
         )
         if oracle_block:
             body += f"\n{oracle_block}"

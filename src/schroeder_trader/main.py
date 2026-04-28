@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
@@ -85,8 +85,8 @@ from schroeder_trader.alerts.email_alert import (
     send_error_alert,
     send_daily_summary,
 )
-from schroeder_trader.agents.daily_report import generate_daily_report
 from schroeder_trader.agents.llm_oracle import OracleInput, query_all
+from schroeder_trader.reports.daily_email import build_email_body
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ def _run_pipeline_inner(conn) -> None:
 
     # Step 8: Compute composite signal (HOLD on failure — never trade blind)
     effective_signal = Signal.HOLD
-    llm_report = None
+    composite_info: dict = {}  # captured for the email body
     try:
         # Fetch/update external features (idempotent, skips if <24h old)
         try:
@@ -322,6 +322,15 @@ def _run_pipeline_inner(conn) -> None:
                             "Stale cash override: %d days in cash, regime=%s, SMA50=%.2f > SMA200=%.2f",
                             days_in_cash, today_regime.value, sma_50, sma_200,
                         )
+
+                    # Capture for the email body
+                    composite_info = {
+                        "composite_signal": composite_sig.value,
+                        "composite_source": source,
+                        "regime": today_regime.value,
+                        "bear_days": bear_days,
+                        "xgb_proba_up": float(proba[idx_up]),
+                    }
 
                     # Kelly sizing (for analysis/logging)
                     k_frac = compute_kelly_fraction(
@@ -485,22 +494,44 @@ def _run_pipeline_inner(conn) -> None:
     except Exception:
         logger.exception("LLM oracle block failed (non-fatal)")
 
-    # Step 12: LLM daily intelligence report (non-fatal)
+    # Step 12: Build structured email + send (non-fatal — pipeline is complete;
+    # don't let an SMTP hang trigger a second SMTP call via the outer handler)
     try:
-        recent = get_shadow_signals(conn)[-10:]
-        if recent:
-            llm_report = generate_daily_report(recent[-1], recent, account)
-            logger.info("LLM daily report generated")
-    except Exception:
-        logger.exception("LLM report generation failed (non-fatal)")
+        # Previous SPY close (for the daily delta line) and previous portfolio
+        # snapshot (excluding today's row, which we just wrote at step 10).
+        prev_close = float(df["close"].iloc[-2]) if len(df) >= 2 else None
+        prev_pf_value = None
         try:
-            send_error_alert("LLM report failed", traceback.format_exc()[-500:])
+            pf_df = pd.read_csv(Path(DB_PATH).parent / "portfolio.csv")
+            pf_df = pf_df[~pf_df["timestamp"].astype(str).str.startswith(today)]
+            if not pf_df.empty:
+                prev_pf_value = float(pf_df.sort_values("id").iloc[-1]["total_value"])
         except Exception:
-            logger.exception("Failed to send LLM failure alert")
+            logger.exception("Could not load previous portfolio value (non-fatal)")
 
-    # Send daily summary (non-fatal — pipeline is complete; don't let an
-    # SMTP hang trigger a second SMTP call via the outer error handler)
-    try:
+        email_body = build_email_body(
+            date_str=today,
+            spy_close=close_price,
+            spy_prev_close=prev_close,
+            portfolio_value=account["portfolio_value"],
+            portfolio_prev_value=prev_pf_value,
+            cash=account["cash"],
+            position_qty=position_qty,
+            sma_signal=signal.value,
+            sma_50=sma_50,
+            sma_200=sma_200,
+            composite_signal=composite_info.get("composite_signal"),
+            composite_source=composite_info.get("composite_source"),
+            regime=composite_info.get("regime"),
+            bear_days=composite_info.get("bear_days"),
+            xgb_proba_up=composite_info.get("xgb_proba_up"),
+            xgb_threshold=XGB_THRESHOLD_LOW,
+            today_action=effective_signal.value,
+            oracle_responses=oracle_responses,
+            data_root=Path(DB_PATH).parent,
+            spy_history=df,
+            live_start_date=date(2026, 4, 15),  # first day of paper trading
+        )
         send_daily_summary(
             portfolio_value=account["portfolio_value"],
             cash=account["cash"],
@@ -509,7 +540,7 @@ def _run_pipeline_inner(conn) -> None:
             sma_50=sma_50,
             sma_200=sma_200,
             oracle_responses=oracle_responses,
-            llm_report=llm_report,
+            email_body=email_body,
         )
     except Exception:
         logger.exception("Daily summary send failed (non-fatal, pipeline already complete)")
