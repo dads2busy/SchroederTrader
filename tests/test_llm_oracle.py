@@ -4,7 +4,10 @@ import pytest
 
 from schroeder_trader.agents.llm_oracle import (
     OracleInput,
+    OracleOutput,
+    OracleResponse,
     _build_user_prompt,
+    _coerce_from_text,
     _parse_json_response,
     query_all,
     query_claude,
@@ -22,6 +25,21 @@ def sample_input():
         portfolio_value=102_095.0,
     )
 
+
+def _text_block(text: str):
+    b = MagicMock()
+    b.type = "text"
+    b.text = text
+    return b
+
+
+def _tool_use_block():
+    b = MagicMock()
+    b.type = "server_tool_use"
+    return b
+
+
+# --- Prompt + JSON parsing helpers --------------------------------------------
 
 def test_user_prompt_includes_all_fields(sample_input):
     prompt = _build_user_prompt(sample_input)
@@ -45,21 +63,17 @@ def test_user_prompt_flat_position():
 
 def test_parse_json_plain():
     text = '{"action": "BUY", "target_exposure": 0.98, "confidence": "HIGH"}'
-    data = _parse_json_response(text)
-    assert data["action"] == "BUY"
-    assert data["target_exposure"] == 0.98
+    assert _parse_json_response(text)["action"] == "BUY"
 
 
 def test_parse_json_with_markdown_fences():
     text = '```json\n{"action": "SELL", "confidence": "LOW"}\n```'
-    data = _parse_json_response(text)
-    assert data["action"] == "SELL"
+    assert _parse_json_response(text)["action"] == "SELL"
 
 
 def test_parse_json_with_prose_prefix():
     text = 'Here is my analysis:\n{"action": "HOLD", "confidence": "MEDIUM"}'
-    data = _parse_json_response(text)
-    assert data["action"] == "HOLD"
+    assert _parse_json_response(text)["action"] == "HOLD"
 
 
 def test_parse_json_no_object_raises():
@@ -67,19 +81,70 @@ def test_parse_json_no_object_raises():
         _parse_json_response("I cannot make a decision.")
 
 
-@patch("schroeder_trader.agents.llm_oracle.anthropic.Anthropic")
-def test_query_claude_parses_response(mock_anthropic_cls, sample_input):
-    client = MagicMock()
-    text_block = MagicMock()
-    text_block.type = "text"
-    text_block.text = (
-        '{"action": "BUY", "target_exposure": 0.95, "confidence": "HIGH", '
-        '"regime_assessment": "BULL", "key_drivers": ["momentum", "breadth"], '
-        '"reasoning": "uptrend intact"}'
+def test_coerce_from_text_clamps_target_exposure():
+    raw = '{"action": "BUY", "target_exposure": 1.5, "confidence": "HIGH"}'
+    out = _coerce_from_text("claude", "model-x", raw)
+    assert out.target_exposure == 1.0
+
+
+def test_coerce_from_text_handles_missing_target_exposure():
+    raw = '{"action": "HOLD", "confidence": "LOW"}'
+    out = _coerce_from_text("claude", "model-x", raw)
+    assert out.target_exposure == 0.0
+
+
+# --- OracleOutput Pydantic schema --------------------------------------------
+
+def test_oracle_output_schema_validates_target_exposure_range():
+    with pytest.raises(Exception):  # pydantic ValidationError
+        OracleOutput(
+            action="BUY",
+            target_exposure=1.5,  # > 1.0
+            confidence="HIGH",
+            regime_assessment="BULL",
+            key_drivers=["a"],
+            reasoning="x",
+        )
+
+
+def test_oracle_output_schema_validates_action_literal():
+    with pytest.raises(Exception):
+        OracleOutput(
+            action="MAYBE",  # not BUY/SELL/HOLD
+            target_exposure=0.5,
+            confidence="HIGH",
+            regime_assessment="BULL",
+            key_drivers=["a"],
+            reasoning="x",
+        )
+
+
+def test_oracle_output_accepts_valid_input():
+    out = OracleOutput(
+        action="BUY",
+        target_exposure=0.98,
+        confidence="HIGH",
+        regime_assessment="BULL",
+        key_drivers=["momentum", "earnings"],
+        reasoning="uptrend intact",
     )
-    response = MagicMock()
-    response.content = [text_block]
-    client.messages.create.return_value = response
+    assert out.action == "BUY"
+    assert out.target_exposure == 0.98
+
+
+# --- query_claude — structured path ------------------------------------------
+
+@patch("schroeder_trader.agents.llm_oracle.anthropic.Anthropic")
+def test_query_claude_structured_path(mock_anthropic_cls, sample_input):
+    client = MagicMock()
+    parsed_response = MagicMock()
+    parsed_response.parsed_output = OracleOutput(
+        action="BUY", target_exposure=0.95, confidence="HIGH",
+        regime_assessment="BULL", key_drivers=["momentum", "breadth"],
+        reasoning="uptrend intact",
+    )
+    parsed_response.content = [_text_block('{"action": "BUY"}')]
+    client.messages.parse.return_value = parsed_response
     mock_anthropic_cls.return_value = client
 
     result = query_claude(sample_input)
@@ -90,68 +155,59 @@ def test_query_claude_parses_response(mock_anthropic_cls, sample_input):
     assert result.regime_assessment == "BULL"
     assert result.key_drivers == ["momentum", "breadth"]
     assert result.error is None
+    # Structured path was used — fallback create() should not have been called
+    client.messages.create.assert_not_called()
 
+
+# --- query_claude — fallback path --------------------------------------------
 
 @patch("schroeder_trader.agents.llm_oracle.anthropic.Anthropic")
-def test_query_claude_clamps_target_exposure(mock_anthropic_cls, sample_input):
+def test_query_claude_falls_back_when_parse_unavailable(mock_anthropic_cls, sample_input):
     client = MagicMock()
-    text_block = MagicMock()
-    text_block.type = "text"
-    text_block.text = '{"action": "BUY", "target_exposure": 1.5, "confidence": "HIGH"}'
+    client.messages.parse.side_effect = AttributeError("not in this SDK build")
     response = MagicMock()
-    response.content = [text_block]
-    client.messages.create.return_value = response
-    mock_anthropic_cls.return_value = client
-
-    result = query_claude(sample_input)
-    assert result.target_exposure == 1.0  # clamped
-
-
-@patch("schroeder_trader.agents.llm_oracle.anthropic.Anthropic")
-def test_query_claude_handles_missing_target_exposure(mock_anthropic_cls, sample_input):
-    client = MagicMock()
-    text_block = MagicMock()
-    text_block.type = "text"
-    text_block.text = '{"action": "HOLD", "confidence": "LOW"}'
-    response = MagicMock()
-    response.content = [text_block]
-    client.messages.create.return_value = response
-    mock_anthropic_cls.return_value = client
-
-    result = query_claude(sample_input)
-    assert result.target_exposure == 0.0  # default
-
-
-@patch("schroeder_trader.agents.llm_oracle.anthropic.Anthropic")
-def test_query_claude_filters_tool_use_blocks(mock_anthropic_cls, sample_input):
-    client = MagicMock()
-    tool_block = MagicMock()
-    tool_block.type = "server_tool_use"
-    text_block = MagicMock()
-    text_block.type = "text"
-    text_block.text = (
+    response.content = [_text_block(
         '{"action": "HOLD", "target_exposure": 0.5, "confidence": "LOW", '
         '"regime_assessment": "CHOPPY"}'
-    )
-    response = MagicMock()
-    response.content = [tool_block, text_block]
+    )]
     client.messages.create.return_value = response
     mock_anthropic_cls.return_value = client
 
     result = query_claude(sample_input)
     assert result.action == "HOLD"
     assert result.target_exposure == 0.5
+    client.messages.create.assert_called_once()
 
+
+@patch("schroeder_trader.agents.llm_oracle.anthropic.Anthropic")
+def test_query_claude_fallback_filters_tool_use_blocks(mock_anthropic_cls, sample_input):
+    client = MagicMock()
+    client.messages.parse.side_effect = AttributeError("force fallback")
+    response = MagicMock()
+    response.content = [
+        _tool_use_block(),
+        _text_block('{"action": "BUY", "target_exposure": 0.7}'),
+    ]
+    client.messages.create.return_value = response
+    mock_anthropic_cls.return_value = client
+
+    result = query_claude(sample_input)
+    assert result.action == "BUY"
+    assert result.target_exposure == 0.7
+
+
+# --- query_openai — structured + fallback ------------------------------------
 
 @patch("schroeder_trader.agents.llm_oracle.OpenAI")
-def test_query_openai_parses_response(mock_openai_cls, sample_input):
+def test_query_openai_structured_path(mock_openai_cls, sample_input):
     client = MagicMock()
-    response = MagicMock()
-    response.output_text = (
-        '{"action": "SELL", "target_exposure": 0.0, "confidence": "MEDIUM", '
-        '"regime_assessment": "BEAR", "key_drivers": ["breadth"], "reasoning": "weakening"}'
+    parsed_response = MagicMock()
+    parsed_response.output_parsed = OracleOutput(
+        action="SELL", target_exposure=0.0, confidence="MEDIUM",
+        regime_assessment="BEAR", key_drivers=["breadth"], reasoning="weakening",
     )
-    client.responses.create.return_value = response
+    parsed_response.output_text = '{"action": "SELL"}'
+    client.responses.parse.return_value = parsed_response
     mock_openai_cls.return_value = client
 
     result = query_openai(sample_input)
@@ -160,12 +216,31 @@ def test_query_openai_parses_response(mock_openai_cls, sample_input):
     assert result.target_exposure == 0.0
     assert result.confidence == "MEDIUM"
     assert result.regime_assessment == "BEAR"
+    client.responses.create.assert_not_called()
 
+
+@patch("schroeder_trader.agents.llm_oracle.OpenAI")
+def test_query_openai_falls_back_when_parse_unavailable(mock_openai_cls, sample_input):
+    client = MagicMock()
+    client.responses.parse.side_effect = TypeError("text_format unsupported")
+    response = MagicMock()
+    response.output_text = (
+        '{"action": "HOLD", "target_exposure": 0.98, "confidence": "LOW", '
+        '"regime_assessment": "CHOPPY", "key_drivers": [], "reasoning": ""}'
+    )
+    client.responses.create.return_value = response
+    mock_openai_cls.return_value = client
+
+    result = query_openai(sample_input)
+    assert result.action == "HOLD"
+    assert result.target_exposure == 0.98
+
+
+# --- query_all ----------------------------------------------------------------
 
 @patch("schroeder_trader.agents.llm_oracle.query_openai")
 @patch("schroeder_trader.agents.llm_oracle.query_claude")
 def test_query_all_returns_both_even_on_failure(mock_claude, mock_openai, sample_input):
-    from schroeder_trader.agents.llm_oracle import OracleResponse
     mock_claude.return_value = OracleResponse(
         provider="claude", model="m", action="BUY", target_exposure=0.98,
         confidence="HIGH", regime_assessment="BULL",
