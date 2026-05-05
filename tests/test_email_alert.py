@@ -160,6 +160,36 @@ def test_send_daily_summary_includes_oracle_block(mock_smtp_cls):
     assert "OPENAI (gpt-5.4): ERROR" in body
 
 
+@patch.dict("os.environ", {"DRY_RUN": "true"})
+@patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
+def test_dry_run_prefixes_subject_with_test(mock_smtp_cls):
+    mock_smtp = MagicMock()
+    mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_smtp)
+    mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+    send_trade_alert(
+        action="BUY", ticker="SPY", quantity=1,
+        portfolio_value=100.0, cash=0.0, sma_50=0.0, sma_200=0.0,
+    )
+    sent_subject = mock_smtp.send_message.call_args[0][0]["Subject"]
+    assert sent_subject.startswith("[TEST] ")
+
+
+@patch.dict("os.environ", {"DRY_RUN": ""}, clear=False)
+@patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
+def test_no_test_prefix_when_dry_run_unset(mock_smtp_cls):
+    mock_smtp = MagicMock()
+    mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_smtp)
+    mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+    send_trade_alert(
+        action="BUY", ticker="SPY", quantity=1,
+        portfolio_value=100.0, cash=0.0, sma_50=0.0, sma_200=0.0,
+    )
+    sent_subject = mock_smtp.send_message.call_args[0][0]["Subject"]
+    assert not sent_subject.startswith("[TEST] ")
+
+
 @patch("schroeder_trader.alerts.email_alert.smtplib.SMTP_SSL")
 def test_send_email_passes_explicit_timeout(mock_smtp_cls):
     mock_smtp = MagicMock()

@@ -1,4 +1,5 @@
 import logging
+import os
 import smtplib
 from email.message import EmailMessage
 
@@ -11,8 +12,19 @@ SMTP_PORT = 465
 _SMTP_TIMEOUT = 30  # Explicit timeout so a hung Gmail connection can't stall the pipeline.
 
 
+def _is_dry_run() -> bool:
+    """True if running under workflow_dispatch with dry_run=true."""
+    return os.getenv("DRY_RUN", "").lower() in ("true", "1", "yes")
+
+
 def _send_email(subject: str, body: str) -> None:
-    """Send an email via Gmail SMTP. Logs and swallows errors."""
+    """Send an email via Gmail SMTP. Logs and swallows errors.
+
+    Prefixes the subject with [TEST] when DRY_RUN is set so manual workflow
+    runs are easy to tell apart from real scheduled runs in your inbox.
+    """
+    if _is_dry_run():
+        subject = f"[TEST] {subject}"
     try:
         msg = EmailMessage()
         msg["Subject"] = subject

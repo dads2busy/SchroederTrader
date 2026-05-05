@@ -7,7 +7,13 @@ on:
     # is_market_open_today + portfolio-based idempotency handle duplicates.
     - cron: '30 20 * * 1-5'   # 16:30 EDT
     - cron: '30 21 * * 1-5'   # 16:30 EST
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Test run: send email tagged [TEST] but don't commit state"
+        required: false
+        default: true
+        type: boolean
 
 # Never run two pipelines at once — they'd race on the git push back.
 concurrency:
@@ -53,13 +59,17 @@ jobs:
           ALERT_EMAIL_FROM: ${{ secrets.ALERT_EMAIL_FROM }}
           ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
           ALERT_EMAIL_APP_PASSWORD: ${{ secrets.ALERT_EMAIL_APP_PASSWORD }}
+          # When set, email_alert prefixes the subject with [TEST]. The pipeline
+          # otherwise runs normally — we just skip the commit step below.
+          DRY_RUN: ${{ inputs.dry_run }}
         run: uv run python -m schroeder_trader.main
 
       # Commit state regardless of pipeline outcome — partial state (e.g. a
       # signal row written before a crash) is still useful and reconciliation
-      # on the next run depends on it.
+      # on the next run depends on it. Skip on manual dry-run so testing
+      # doesn't block the afternoon scheduled run via portfolio idempotency.
       - name: Commit state
-        if: always()
+        if: always() && inputs.dry_run != true
         run: |
           git config user.name  "schroedertrader-bot"
           git config user.email "bot@schroedertrader.local"
