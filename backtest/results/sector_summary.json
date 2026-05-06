@@ -1,0 +1,66 @@
+[
+  {
+    "ticker": "SPY",
+    "system": {
+      "sharpe": 2.225,
+      "max_dd_pct": -9.83,
+      "total_return_pct": 3600.69
+    },
+    "buy_and_hold": {
+      "sharpe": 0.894,
+      "max_dd_pct": -33.72,
+      "total_return_pct": 755.34
+    },
+    "sessions": 3906,
+    "start": "2010-06-07",
+    "end": "2025-12-12"
+  },
+  {
+    "ticker": "XLK",
+    "system": {
+      "sharpe": 2.135,
+      "max_dd_pct": -17.1,
+      "total_return_pct": 10021.58
+    },
+    "buy_and_hold": {
+      "sharpe": 0.946,
+      "max_dd_pct": -33.56,
+      "total_return_pct": 1578.84
+    },
+    "sessions": 3906,
+    "start": "2010-06-07",
+    "end": "2025-12-12"
+  },
+  {
+    "ticker": "XLE",
+    "system": {
+      "sharpe": 1.169,
+      "max_dd_pct": -23.89,
+      "total_return_pct": 1588.1
+    },
+    "buy_and_hold": {
+      "sharpe": 0.395,
+      "max_dd_pct": -71.26,
+      "total_return_pct": 197.75
+    },
+    "sessions": 3906,
+    "start": "2010-06-07",
+    "end": "2025-12-12"
+  },
+  {
+    "ticker": "XLV",
+    "system": {
+      "sharpe": 1.563,
+      "max_dd_pct": -12.97,
+      "total_return_pct": 1110.76
+    },
+    "buy_and_hold": {
+      "sharpe": 0.861,
+      "max_dd_pct": -28.4,
+      "total_return_pct": 605.62
+    },
+    "sessions": 3906,
+    "start": "2010-06-07",
+    "end": "2025-12-12"
+  }
+]
