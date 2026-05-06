@@ -216,10 +216,13 @@ def log_shadow_signal(
     })
 
 
-def get_shadow_signals(store: CsvStore) -> list[dict]:
+def get_shadow_signals(store: CsvStore, ticker: str = "SPY") -> list[dict]:
+    """Return shadow signals for a given ticker, oldest-first."""
     df = store.read("shadow_signals")
     if df.empty:
         return []
+    if "ticker" in df.columns:
+        df = df[df["ticker"] == ticker]
     df = df.sort_values("id")
     return [_row_to_dict(r) for _, r in df.iterrows()]
 
@@ -279,12 +282,14 @@ def get_latest_trailing_stop_state(store: CsvStore) -> dict | None:
     return _row_to_dict(row)
 
 
-def get_shadow_signal_timestamps(store: CsvStore) -> list[str]:
-    """All timestamps in shadow_signals, ordered by id ascending.
+def get_shadow_signal_timestamps(store: CsvStore, ticker: str = "SPY") -> list[str]:
+    """Timestamps in shadow_signals for a given ticker, ordered by id ascending.
     Used by trailing stop for trading-date history."""
     df = store.read("shadow_signals")
     if df.empty:
         return []
+    if "ticker" in df.columns:
+        df = df[df["ticker"] == ticker]
     df = df.sort_values("id")
     return df["timestamp"].astype(str).tolist()
 

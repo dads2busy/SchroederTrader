@@ -42,6 +42,7 @@ from schroeder_trader.config import (
     KELLY_MULTIPLIER,
     KELLY_WIN_LOSS_RATIO,
     PROJECT_ROOT,
+    SHADOW_TICKERS,
     TICKER,
     TRAILING_STOP_PCT,
     STALE_CASH_DAYS,
@@ -494,6 +495,21 @@ def _run_pipeline_inner(conn) -> None:
     except Exception:
         logger.exception("LLM oracle block failed (non-fatal)")
 
+    # Step 11.5: Shadow tickers — compute composite signal for each non-trading
+    # ticker (XLK etc.) and log to shadow_signals.csv. Validated by backtest;
+    # not yet wired into trading or the email. Wrapped per-ticker so a single
+    # ticker failure doesn't stop the others.
+    if FEATURES_CSV_PATH.exists():
+        try:
+            ext_df_shadow = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
+            for shadow_ticker, shadow_model_path in SHADOW_TICKERS.items():
+                try:
+                    _run_shadow_for_ticker(conn, now, shadow_ticker, shadow_model_path, ext_df_shadow)
+                except Exception:
+                    logger.exception("Shadow ticker %s failed (non-fatal)", shadow_ticker)
+        except Exception:
+            logger.exception("Shadow tickers block failed (non-fatal)")
+
     # Step 12: Build structured email + send (non-fatal — pipeline is complete;
     # don't let an SMTP hang trigger a second SMTP call via the outer handler)
     try:
@@ -546,6 +562,91 @@ def _run_pipeline_inner(conn) -> None:
         logger.exception("Daily summary send failed (non-fatal, pipeline already complete)")
 
     logger.info("Pipeline complete")
+
+
+def _run_shadow_for_ticker(conn, now: datetime, ticker: str, model_path: Path, ext_df) -> None:
+    """Compute composite signal for a non-trading ticker; log to shadow_signals.
+
+    No trailing stop, no Kelly, no oracles — just the regime + SMA + XGB +
+    composite routing, written with ticker=ticker so it lives alongside SPY's
+    production rows. Failures are non-fatal.
+    """
+    model = load_model(model_path)
+    if model is None:
+        logger.warning("Shadow %s: no model at %s, skipping", ticker, model_path)
+        return
+    if list(model.classes_) != [0, 1, 2]:
+        logger.warning("Shadow %s: model classes %s mismatch, skipping", ticker, list(model.classes_))
+        return
+
+    df = fetch_daily_bars(ticker, days=600)
+    close_price = float(df["close"].iloc[-1])
+
+    pipeline = FeaturePipeline()
+    features = pipeline.compute_features_extended(df, ext_df)
+    if len(features) == 0:
+        logger.warning("Shadow %s: no features computed", ticker)
+        return
+
+    regime_series = compute_regime_series(features)
+    features["regime_label"] = compute_regime_labels(features)
+    today_regime = regime_series.iloc[-1]
+    if not isinstance(today_regime, Regime):
+        today_regime = Regime.CHOPPY
+    bear_days = count_consecutive_bear_days(regime_series)
+
+    bear_weakening = False
+    if today_regime == Regime.BEAR and "log_return_5d" in features.columns:
+        lr5 = features["log_return_5d"].iloc[-1]
+        bear_weakening = not pd.isna(lr5) and lr5 > 0
+
+    feature_cols = [
+        "log_return_5d", "log_return_20d", "volatility_20d",
+        "credit_spread", "dollar_momentum", "regime_label",
+    ]
+    last_row = features[feature_cols].iloc[[-1]]
+    if last_row.isna().any().any():
+        logger.warning("Shadow %s: NaN in feature row, skipping", ticker)
+        return
+
+    class_to_idx = {int(c): i for i, c in enumerate(model.classes_)}
+    idx_up = class_to_idx[2]
+    idx_down = class_to_idx[0]
+    proba = model.predict_proba(last_row)[0]
+    pred_class = int(np.argmax(proba))
+    proba_dict = {
+        "DOWN": float(proba[idx_down]),
+        "FLAT": float(proba[class_to_idx[1]]),
+        "UP": float(proba[idx_up]),
+    }
+    if pred_class == idx_up and proba[idx_up] > XGB_THRESHOLD_LOW:
+        xgb_low = Signal.BUY
+    elif pred_class == idx_down and proba[idx_down] > XGB_THRESHOLD_LOW:
+        xgb_low = Signal.SELL
+    else:
+        xgb_low = Signal.HOLD
+
+    sma_signal, sma_50, sma_200 = generate_signal(df)
+
+    composite_sig, source = composite_signal_hybrid(
+        today_regime, sma_signal, xgb_low, bear_weakening=bear_weakening,
+    )
+
+    log_shadow_signal(
+        conn, now, ticker, close_price,
+        predicted_class=pred_class,
+        predicted_proba=json.dumps(proba_dict),
+        ml_signal=composite_sig.value,
+        sma_signal=sma_signal.value,
+        regime=today_regime.value,
+        signal_source=source,
+        bear_day_count=bear_days if today_regime == Regime.BEAR else None,
+    )
+    logger.info(
+        "Shadow %s: %s (source=%s, regime=%s, UP=%.2f, sma=%s)",
+        ticker, composite_sig.value, source, today_regime.value,
+        float(proba[idx_up]), sma_signal.value,
+    )
 
 
 def _deadline_handler(signum, frame):

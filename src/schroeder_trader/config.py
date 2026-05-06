@@ -13,6 +13,8 @@ LOG_DIR = PROJECT_ROOT / "logs"
 # Model paths
 COMPOSITE_MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_spy_20d.json"
 HMM_MODEL_PATH = PROJECT_ROOT / "models" / "hmm_regime.pkl"
+# Shadow-only ticker models (logged but not traded) — see SHADOW_TICKERS below
+XLK_MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_xlk_20d.json"
 HMM_RETRAIN_DAYS = 30
 FEATURES_CSV_PATH = PROJECT_ROOT / "backtest" / "data" / "features_daily.csv"
 
@@ -28,6 +30,13 @@ XGB_THRESHOLD_LOW = 0.35         # confidence threshold for Choppy regime
 STALE_CASH_DAYS = 7              # re-enter BULL if in cash this many days + SMA50 > SMA200
 TRAILING_STOP_PCT = 0.10            # 10% portfolio drawdown triggers stop
 TRAILING_STOP_COOLDOWN_DAYS = 5     # trading days before re-entry allowed
+
+# Shadow tickers compute composite signals but do not trade. Each entry maps a
+# ticker symbol to its trained XGBoost model file. Logged to shadow_signals.csv
+# with the ticker column populated, alongside SPY's production rows.
+SHADOW_TICKERS: dict[str, "Path"] = {
+    "XLK": XLK_MODEL_PATH,
+}
 
 # Alpaca
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")

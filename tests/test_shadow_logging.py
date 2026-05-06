@@ -108,6 +108,36 @@ def test_shadow_signal_trailing_stop_defaults_null(tmp_path):
     store.close()
 
 
+def test_get_shadow_signals_filters_by_ticker(tmp_path):
+    store = init_db(tmp_path / "test.db")
+    now = datetime.now(timezone.utc)
+    log_shadow_signal(store, now, "SPY", 700.0, None, None, "BUY", "HOLD",
+                      regime="CHOPPY", signal_source="XGB")
+    log_shadow_signal(store, now, "XLK", 240.0, None, None, "SELL", "HOLD",
+                      regime="BEAR", signal_source="FLAT")
+    log_shadow_signal(store, now, "XLK", 241.0, None, None, "BUY", "HOLD",
+                      regime="BULL", signal_source="SMA")
+
+    spy_rows = get_shadow_signals(store, "SPY")
+    xlk_rows = get_shadow_signals(store, "XLK")
+    assert len(spy_rows) == 1
+    assert spy_rows[0]["close_price"] == 700.0
+    assert len(xlk_rows) == 2
+    assert {r["regime"] for r in xlk_rows} == {"BEAR", "BULL"}
+    store.close()
+
+
+def test_get_shadow_signals_default_ticker_is_spy(tmp_path):
+    store = init_db(tmp_path / "test.db")
+    now = datetime.now(timezone.utc)
+    log_shadow_signal(store, now, "SPY", 700.0, None, None, "BUY", "HOLD")
+    log_shadow_signal(store, now, "XLK", 240.0, None, None, "SELL", "HOLD")
+    rows = get_shadow_signals(store)  # no ticker — defaults to SPY
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "SPY"
+    store.close()
+
+
 def test_shadow_signal_xgb_with_proba(tmp_path):
     store = init_db(tmp_path / "test.db")
     now = datetime.now(timezone.utc)
