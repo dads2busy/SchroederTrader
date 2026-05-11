@@ -15,6 +15,8 @@ COMPOSITE_MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_spy_20d.json"
 HMM_MODEL_PATH = PROJECT_ROOT / "models" / "hmm_regime.pkl"
 # Shadow-only ticker models (logged but not traded) — see SHADOW_TICKERS below
 XLK_MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_xlk_20d.json"
+XLV_MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_xlv_20d.json"
+XLE_MODEL_PATH = PROJECT_ROOT / "models" / "xgboost_xle_20d.json"
 HMM_RETRAIN_DAYS = 30
 FEATURES_CSV_PATH = PROJECT_ROOT / "backtest" / "data" / "features_daily.csv"
 
@@ -36,6 +38,8 @@ TRAILING_STOP_COOLDOWN_DAYS = 5     # trading days before re-entry allowed
 # with the ticker column populated, alongside SPY's production rows.
 SHADOW_TICKERS: dict[str, "Path"] = {
     "XLK": XLK_MODEL_PATH,
+    "XLV": XLV_MODEL_PATH,
+    "XLE": XLE_MODEL_PATH,
 }
 
 # Alpaca
