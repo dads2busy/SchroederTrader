@@ -2,18 +2,10 @@ name: daily
 
 on:
   schedule:
-    # Two cron entries to keep the pipeline firing after market close (16:00 ET)
-    # year-round despite GHA cron's lack of DST awareness:
-    #   20:30 UTC = 16:30 EDT  (correct after close in summer)
-    #   21:30 UTC = 16:30 EST  (correct after close in winter)
-    # Both fire year-round; the off-season entry exits at the portfolio-based
-    # idempotency check (after the first run already wrote today's row).
-    # KNOWN ISSUE: during EST, the 20:30 UTC entry fires at 15:30 EST — BEFORE
-    # market close. is_market_open_today is date-only, not time-aware, so the
-    # run can proceed with intraday prices. Either remove this entry before
-    # November or add a time-of-day guard.
-    - cron: '30 20 * * 1-5'   # 16:30 EDT  / 15:30 EST (pre-close in winter)
-    - cron: '30 21 * * 1-5'   # 17:30 EDT (duplicate) / 16:30 EST
+    # Single entry at 21:30 UTC = 16:30 EST = 17:30 EDT. Always after market
+    # close (16:00 ET) regardless of DST. Summer runs land an hour later than
+    # ideal, but staying past-close is what matters — never before.
+    - cron: '30 21 * * 1-5'
   workflow_dispatch:
     inputs:
       dry_run:
