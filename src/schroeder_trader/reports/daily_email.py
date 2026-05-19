@@ -208,7 +208,8 @@ def _exposure_from_decisions(decisions_by_date: dict) -> dict:
     """Translate BUY/HOLD/SELL sequence into a 0/1 exposure map.
 
     HOLD carries the previous exposure forward. A leading HOLD (no prior BUY)
-    starts at 0.0 — matches "you can't hold what you don't have."
+    starts at 0.0 — matches "you can't hold what you don't have." Unknown
+    decision strings raise ValueError rather than silently passing through.
     """
     out: dict = {}
     current = 0.0
@@ -218,7 +219,12 @@ def _exposure_from_decisions(decisions_by_date: dict) -> dict:
             current = 1.0
         elif decision == "SELL":
             current = 0.0
-        # HOLD: leave `current` unchanged
+        elif decision == "HOLD":
+            pass  # carry current forward
+        else:
+            raise ValueError(
+                f"Unknown decision {decision!r}; expected BUY, HOLD, or SELL"
+            )
         out[d] = current
     return out
 

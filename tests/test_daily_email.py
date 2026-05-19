@@ -4,7 +4,6 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
-from datetime import date as _date
 
 from schroeder_trader.reports.daily_email import (
     build_today_section,
@@ -143,25 +142,35 @@ def test_build_email_body_full(tmp_path):
 
 def test_exposure_from_decisions_buy_hold_sell_carry_forward():
     decisions = {
-        _date(2026, 5, 12): "BUY",
-        _date(2026, 5, 13): "HOLD",
-        _date(2026, 5, 14): "HOLD",
-        _date(2026, 5, 15): "SELL",
-        _date(2026, 5, 18): "HOLD",
+        date(2026, 5, 12): "BUY",
+        date(2026, 5, 13): "HOLD",
+        date(2026, 5, 14): "HOLD",
+        date(2026, 5, 15): "SELL",
+        date(2026, 5, 18): "HOLD",
     }
     exposure = _exposure_from_decisions(decisions)
-    assert exposure[_date(2026, 5, 12)] == 1.0
-    assert exposure[_date(2026, 5, 13)] == 1.0  # HOLD carries BUY forward
-    assert exposure[_date(2026, 5, 14)] == 1.0
-    assert exposure[_date(2026, 5, 15)] == 0.0  # SELL flattens
-    assert exposure[_date(2026, 5, 18)] == 0.0  # HOLD carries SELL forward
+    assert exposure[date(2026, 5, 12)] == 1.0
+    assert exposure[date(2026, 5, 13)] == 1.0  # HOLD carries BUY forward
+    assert exposure[date(2026, 5, 14)] == 1.0
+    assert exposure[date(2026, 5, 15)] == 0.0  # SELL flattens
+    assert exposure[date(2026, 5, 18)] == 0.0  # HOLD carries SELL forward
 
 
 def test_exposure_from_decisions_starts_flat_if_first_is_hold():
     decisions = {
-        _date(2026, 5, 12): "HOLD",
-        _date(2026, 5, 13): "BUY",
+        date(2026, 5, 12): "HOLD",
+        date(2026, 5, 13): "BUY",
     }
     exposure = _exposure_from_decisions(decisions)
-    assert exposure[_date(2026, 5, 12)] == 0.0  # nothing to carry forward
-    assert exposure[_date(2026, 5, 13)] == 1.0
+    assert exposure[date(2026, 5, 12)] == 0.0  # nothing to carry forward
+    assert exposure[date(2026, 5, 13)] == 1.0
+
+
+def test_exposure_from_decisions_empty_input():
+    assert _exposure_from_decisions({}) == {}
+
+
+def test_exposure_from_decisions_rejects_unknown_decision():
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="Unknown decision"):
+        _exposure_from_decisions({date(2026, 5, 12): "SELL "})  # trailing space
