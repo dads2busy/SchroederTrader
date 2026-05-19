@@ -99,10 +99,15 @@ def test_compute_decisions_hold_carries_prior_basket_exposure(
         "kelly_qty": [None], "high_water_mark": [None],
         "trailing_stop_triggered": [None],
     })
-    pd.DataFrame(columns=[
-        "id", "timestamp", "pipeline", "ticker",
-        "cash", "position_qty", "position_value", "total_value",
-    ]).to_csv(tmp_path / "portfolio.csv", index=False)
+    # Seed a prior basket row to make this a warm start (not cold start).
+    # Cold start overrides HOLD to 1.0; warm start makes HOLD walk back to BUY.
+    pf = pd.DataFrame({
+        "id": [1], "timestamp": ["2026-05-20T20:30:00+00:00"],
+        "pipeline": ["basket"], "ticker": ["SPY"],
+        "cash": [500.0], "position_qty": [64],
+        "position_value": [99500.0], "total_value": [100000.0],
+    })
+    pf.to_csv(tmp_path / "portfolio.csv", index=False)
     ss.to_csv(tmp_path / "shadow_signals.csv", index=False)
     store = CsvStore(tmp_path)
 
