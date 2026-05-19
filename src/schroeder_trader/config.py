@@ -42,6 +42,18 @@ SHADOW_TICKERS: dict[str, "Path"] = {
     "XLE": XLE_MODEL_PATH,
 }
 
+# Basket weights for the SECTOR SHADOW row in the daily email. Daily-rebalanced
+# weighted combination of per-ticker composite strategies. 45/30/15/10 picked
+# from a Pareto-frontier grid search (in-sample Sharpe 2.40) and confirmed by
+# walk-forward validation (OOS Sharpe 2.34, MaxDD -8.76%, best of tested mixes).
+# See backtest/optimize_basket_weights.py and backtest/walk_forward_basket.py.
+SHADOW_BASKET_WEIGHTS: dict[str, float] = {
+    "SPY": 0.45,
+    "XLK": 0.30,
+    "XLV": 0.15,
+    "XLE": 0.10,
+}
+
 # Alpaca
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")

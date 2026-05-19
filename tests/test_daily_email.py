@@ -13,6 +13,8 @@ from schroeder_trader.reports.daily_email import (
     build_sector_shadow_section,
     _exposure_from_decisions,
     _compute_ticker_shadow_pnl,
+    _compute_basket_pnl,
+    _annualize,
 )
 
 
@@ -414,3 +416,140 @@ def test_compute_ticker_shadow_pnl_handles_date_indexed_closes():
     assert result is not None
     assert result["sessions"] == 3
     assert abs(result["composite_return_pct"] - 5.0) < 1e-6
+
+
+def test_annualize_basic():
+    # +10% over 252 sessions → annualized +10%
+    assert abs(_annualize(10.0, 252) - 10.0) < 1e-9
+    # +21% over 504 sessions → (1.21)^(252/504) - 1 = 10%
+    assert abs(_annualize(21.0, 504) - 10.0) < 1e-6
+    # zero sessions guard
+    assert _annualize(50.0, 0) == 0.0
+
+
+def test_compute_ticker_shadow_pnl_now_returns_annualized_and_value_series():
+    shadow_df = pd.DataFrame({
+        "timestamp": [
+            "2026-05-12T20:30:00+00:00",
+            "2026-05-13T20:30:00+00:00",
+            "2026-05-14T20:30:00+00:00",
+        ],
+        "ticker": ["XLK"] * 3,
+        "close_price": [100.0, 110.0, 121.0],
+        "ml_signal": ["BUY", "HOLD", "HOLD"],
+    })
+    closes = pd.Series(
+        [100.0, 110.0, 121.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]),
+    )
+    result = _compute_ticker_shadow_pnl(shadow_df, closes)
+    assert "annualized_pct" in result
+    assert "composite_value_series" in result
+    assert "bnh_value_series" in result
+    # +21% over 3 sessions → (1.21)^(252/3) - 1 = a huge number; we just verify
+    # it's computed (not None) and matches the formula.
+    expected = ((1.21 ** (252 / 3)) - 1) * 100
+    assert abs(result["annualized_pct"] - expected) < 1.0  # huge value, loose tol
+    # value series starts at 100 and ends at 121
+    vs = result["composite_value_series"]
+    assert abs(float(vs.iloc[0]) - 100.0) < 1e-6
+    assert abs(float(vs.iloc[-1]) - 121.0) < 1e-6
+
+
+def test_compute_basket_pnl_daily_rebalanced():
+    # Two tickers, three sessions. SPY value 100→105→110; XLK value 100→120→144.
+    # Daily rets: SPY = [+5%, +4.76%]; XLK = [+20%, +20%].
+    # Weights 50/50 → basket daily rets = [+12.5%, +12.38%].
+    # Basket value: 100 * 1.125 * 1.1238 = 126.4%; total return = +26.4%
+    spy_vs = pd.Series([100.0, 105.0, 110.0],
+                       index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]))
+    xlk_vs = pd.Series([100.0, 120.0, 144.0],
+                       index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]))
+    per_ticker = {
+        "SPY": {"composite_value_series": spy_vs, "bnh_value_series": spy_vs},
+        "XLK": {"composite_value_series": xlk_vs, "bnh_value_series": xlk_vs},
+    }
+    weights = {"SPY": 0.5, "XLK": 0.5}
+    result = _compute_basket_pnl(per_ticker, weights)
+    assert result is not None
+    assert result["sessions"] == 3
+    # 1.125 * 1.123809524 = 1.264285... → +26.43%
+    expected = (1.125 * (130 / 115.5 + 1 - 1) / 1 - 1) * 100  # paranoid manual check
+    # Cleaner: just compute it the way the function would
+    expected_basket = (1.125 * 1.123809523809) - 1
+    assert abs(result["composite_return_pct"] / 100 - expected_basket) < 1e-6
+    # Composite and B&H are the same series here so edge should be 0
+    assert abs(result["edge_pp"]) < 1e-9
+
+
+def test_compute_basket_pnl_returns_none_when_ticker_missing():
+    per_ticker = {
+        "SPY": {
+            "composite_value_series": pd.Series([100.0, 110.0]),
+            "bnh_value_series": pd.Series([100.0, 110.0]),
+        },
+    }
+    weights = {"SPY": 0.5, "XLK": 0.5}  # XLK absent
+    assert _compute_basket_pnl(per_ticker, weights) is None
+
+
+def test_sector_shadow_section_renders_basket_row(tmp_path):
+    shadow = pd.DataFrame({
+        "timestamp": [
+            "2026-05-12T20:30:00+00:00", "2026-05-13T20:30:00+00:00", "2026-05-14T20:30:00+00:00",
+            "2026-05-12T20:30:00+00:00", "2026-05-13T20:30:00+00:00", "2026-05-14T20:30:00+00:00",
+        ],
+        "ticker": ["SPY", "SPY", "SPY", "XLK", "XLK", "XLK"],
+        "close_price": [700.0, 700.0, 700.0, 100.0, 100.0, 100.0],
+        "ml_signal": ["BUY"] * 3 + ["BUY"] * 3,
+    })
+    shadow.to_csv(tmp_path / "shadow_signals.csv", index=False)
+
+    spy_closes = pd.Series(
+        [700.0, 707.0, 714.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]),
+    )
+    xlk_closes = pd.Series(
+        [100.0, 105.0, 110.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]),
+    )
+
+    section = build_sector_shadow_section(
+        shadow_signals_path=tmp_path / "shadow_signals.csv",
+        ticker_close_histories={"SPY": spy_closes, "XLK": xlk_closes},
+        basket_weights={"SPY": 0.5, "XLK": 0.5},
+    )
+    assert "BASKET" in section
+    assert "Ann." in section  # new annualized column header
+    # SPY per-row should NOT appear in the table body (excluded from per-row display)
+    assert "SECTOR SHADOW" in section
+    # XLK row should appear
+    assert "XLK" in section
+    # Annualized for 3-session window should be "—" (below threshold)
+    assert "—" in section
+
+
+def test_sector_shadow_section_omits_basket_when_ticker_missing(tmp_path):
+    # XLK has shadow data, but basket weights ask for XLV too — basket should
+    # be silently omitted while the XLK row still renders.
+    shadow = pd.DataFrame({
+        "timestamp": [
+            "2026-05-12T20:30:00+00:00", "2026-05-13T20:30:00+00:00",
+        ],
+        "ticker": ["XLK", "XLK"],
+        "close_price": [100.0, 110.0],
+        "ml_signal": ["BUY", "HOLD"],
+    })
+    shadow.to_csv(tmp_path / "shadow_signals.csv", index=False)
+    xlk_closes = pd.Series(
+        [100.0, 110.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13"]),
+    )
+
+    section = build_sector_shadow_section(
+        shadow_signals_path=tmp_path / "shadow_signals.csv",
+        ticker_close_histories={"XLK": xlk_closes},
+        basket_weights={"SPY": 0.5, "XLK": 0.5},
+    )
+    assert "XLK" in section
+    assert "BASKET" not in section

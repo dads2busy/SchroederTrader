@@ -281,25 +281,113 @@ def _compute_ticker_shadow_pnl(
     composite_pct = (float(values.iloc[-1]) / 100.0 - 1) * 100
     bnh_pct = (float(closes_window.iloc[-1]) / float(closes_window.iloc[0]) - 1) * 100
 
+    # B&H value series rebased to 100 at inception, for basket-math reuse.
+    bnh_values = closes_window / float(closes_window.iloc[0]) * 100.0
+
     return {
         "inception": inception,
         "sessions": len(df),
         "composite_return_pct": composite_pct,
         "bnh_return_pct": bnh_pct,
         "edge_pp": composite_pct - bnh_pct,
+        "annualized_pct": _annualize(composite_pct, len(df)),
+        "composite_value_series": values,
+        "bnh_value_series": bnh_values,
     }
+
+
+def _annualize(cumulative_pct: float, sessions: int, periods_per_year: int = 252) -> float:
+    """Convert a cumulative return % over N trading sessions into an annualized %.
+
+    Uses geometric scaling: (1+r)^(periods_per_year/sessions) - 1. Returns 0.0
+    when sessions is non-positive to keep the call site simple.
+    """
+    if sessions <= 0:
+        return 0.0
+    return ((1.0 + cumulative_pct / 100.0) ** (periods_per_year / sessions) - 1.0) * 100.0
+
+
+def _compute_basket_pnl(
+    per_ticker_results: dict, weights: dict,
+) -> dict | None:
+    """Daily-rebalanced basket of per-ticker shadow results.
+
+    per_ticker_results: {ticker: dict from _compute_ticker_shadow_pnl(...)}.
+                        Each dict must contain 'composite_value_series' and
+                        'bnh_value_series'.
+    weights: {ticker: float} summing to 1.0.
+
+    Returns None if any weighted ticker is missing or the aligned window has
+    fewer than 2 sessions.
+    """
+    missing = [t for t in weights if t not in per_ticker_results]
+    if missing:
+        return None
+
+    composite_panel = pd.DataFrame(
+        {t: per_ticker_results[t]["composite_value_series"] for t in weights}
+    ).dropna(how="any")
+    bnh_panel = pd.DataFrame(
+        {t: per_ticker_results[t]["bnh_value_series"] for t in weights}
+    ).dropna(how="any")
+    if len(composite_panel) < 2 or len(bnh_panel) < 2:
+        return None
+
+    w = pd.Series(weights)
+
+    def _basket_return(panel: pd.DataFrame) -> float:
+        daily = panel.pct_change().dropna()
+        weighted = (daily * w).sum(axis=1)
+        return (float((1.0 + weighted).cumprod().iloc[-1]) - 1) * 100
+
+    composite_pct = _basket_return(composite_panel)
+    bnh_pct = _basket_return(bnh_panel)
+    sessions = len(composite_panel)
+    inception = composite_panel.index[0]
+    if hasattr(inception, "date"):
+        inception = inception.date()
+
+    return {
+        "inception": inception,
+        "sessions": sessions,
+        "composite_return_pct": composite_pct,
+        "bnh_return_pct": bnh_pct,
+        "edge_pp": composite_pct - bnh_pct,
+        "annualized_pct": _annualize(composite_pct, sessions),
+    }
+
+
+_ANNUALIZED_MIN_SESSIONS = 20
+
+
+def _fmt_ann(annualized_pct: float | None, sessions: int) -> str:
+    """Format annualized %, blanking out windows too short to be meaningful."""
+    if annualized_pct is None or sessions < _ANNUALIZED_MIN_SESSIONS:
+        return "—"
+    return _fmt_pct(annualized_pct)
+
+
+def _fmt_edge(edge_pp: float | None) -> str:
+    if edge_pp is None:
+        return "—"
+    # Snap sub-cent edges to 0 so float accumulation noise doesn't render
+    # as "-0.00 pp" when composite and B&H are numerically identical.
+    val = edge_pp if abs(edge_pp) >= 0.005 else 0.0
+    return f"{val:+.2f} pp"
 
 
 def build_sector_shadow_section(
     *,
     shadow_signals_path: Path,
     ticker_close_histories: dict,
+    basket_weights: dict | None = None,
 ) -> str:
     """Build the SECTOR SHADOW table from shadow_signals.csv.
 
-    Excludes SPY (already shown elsewhere). Tickers with fewer than two
-    sessions or with no matching close history are skipped. Returns an
-    empty string if no rows qualify — caller should omit the section.
+    Per-ticker rows show non-SPY tickers (SPY's real P&L is in PERFORMANCE
+    above). When basket_weights is supplied AND every weighted ticker has
+    enough shadow history, a BASKET row is appended showing the daily-
+    rebalanced weighted combination.
     """
     if not shadow_signals_path.exists():
         return ""
@@ -307,36 +395,72 @@ def build_sector_shadow_section(
     if shadow.empty:
         return ""
 
-    rows: list[tuple[str, dict]] = []
-    for ticker in sorted(t for t in shadow["ticker"].dropna().unique() if t != "SPY"):
+    # Compute per-ticker results for everything in shadow (including SPY) so
+    # the basket math has all ingredients. SPY's own row is filtered out below.
+    all_results: dict[str, dict] = {}
+    for ticker in sorted(shadow["ticker"].dropna().unique()):
         closes = ticker_close_histories.get(ticker)
         if closes is None or len(closes) == 0:
             continue
         ticker_df = shadow[shadow["ticker"] == ticker]
         result = _compute_ticker_shadow_pnl(ticker_df, closes)
         if result is not None:
-            rows.append((ticker, result))
+            all_results[ticker] = result
 
-    if not rows:
+    rows: list[tuple[str, dict]] = [
+        (t, r) for t, r in all_results.items() if t != "SPY"
+    ]
+
+    basket_row: dict | None = None
+    if basket_weights:
+        basket_row = _compute_basket_pnl(all_results, basket_weights)
+
+    if not rows and basket_row is None:
         return ""
 
-    lines = [
-        f"  {'Ticker':<7} {'Since':<11} {'Sessions':>8}  {'Composite':>9}  {'B&H':>9}  {'Edge':>9}",
-        f"  {'-'*7} {'-'*11} {'-'*8}  {'-'*9}  {'-'*9}  {'-'*9}",
-    ]
+    header = (
+        f"  {'Ticker':<7} {'Since':<11} {'Sessions':>8}  "
+        f"{'Composite':>9}  {'Ann.':>9}  {'B&H':>9}  {'Edge':>9}"
+    )
+    sep = (
+        f"  {'-'*7} {'-'*11} {'-'*8}  "
+        f"{'-'*9}  {'-'*9}  {'-'*9}  {'-'*9}"
+    )
+    lines = [header, sep]
     for ticker, r in rows:
-        comp = _fmt_pct(r["composite_return_pct"])
-        bnh = _fmt_pct(r["bnh_return_pct"])
-        # Snap sub-cent edges to 0 so float accumulation noise doesn't render
-        # as "-0.00 pp" when composite and B&H are numerically identical.
-        edge_val = r["edge_pp"] if abs(r["edge_pp"]) >= 0.005 else 0.0
-        edge = f"{edge_val:+.2f} pp"
         lines.append(
-            f"  {ticker:<7} {str(r['inception']):<11} {r['sessions']:>8}  {comp:>9}  {bnh:>9}  {edge:>9}"
+            f"  {ticker:<7} {str(r['inception']):<11} {r['sessions']:>8}  "
+            f"{_fmt_pct(r['composite_return_pct']):>9}  "
+            f"{_fmt_ann(r['annualized_pct'], r['sessions']):>9}  "
+            f"{_fmt_pct(r['bnh_return_pct']):>9}  "
+            f"{_fmt_edge(r['edge_pp']):>9}"
         )
+
+    if basket_row is not None:
+        weight_label = "/".join(
+            f"{int(round(basket_weights[t]*100))}" for t in basket_weights
+        )
+        ticker_label = "BASKET"
+        # Insert a separator before the basket so it visually stands out.
+        lines.append(sep)
+        lines.append(
+            f"  {ticker_label:<7} {str(basket_row['inception']):<11} "
+            f"{basket_row['sessions']:>8}  "
+            f"{_fmt_pct(basket_row['composite_return_pct']):>9}  "
+            f"{_fmt_ann(basket_row['annualized_pct'], basket_row['sessions']):>9}  "
+            f"{_fmt_pct(basket_row['bnh_return_pct']):>9}  "
+            f"{_fmt_edge(basket_row['edge_pp']):>9}"
+        )
+        lines.append(
+            f"           weights: {'/'.join(basket_weights.keys())} = {weight_label}"
+        )
+
     lines.append("")
     lines.append("  Note: composite signal logged but not traded; numbers reflect")
     lines.append("        what binary exposure would have earned vs buy-and-hold.")
+    lines.append(
+        f"        Annualized shown once a ticker has {_ANNUALIZED_MIN_SESSIONS}+ sessions of history."
+    )
     return _section("SECTOR SHADOW (composite signal, not trading)", lines)
 
 
@@ -405,6 +529,7 @@ def build_email_body(
     spy_history: pd.DataFrame,
     live_start_date: date,
     sector_close_histories: dict,
+    basket_weights: dict | None = None,
 ) -> str:
     """Compose the full email body."""
     sections = [
@@ -441,6 +566,7 @@ def build_email_body(
     sector_section = build_sector_shadow_section(
         shadow_signals_path=data_root / "shadow_signals.csv",
         ticker_close_histories=sector_close_histories,
+        basket_weights=basket_weights,
     )
     if sector_section:
         sections.append(sector_section)

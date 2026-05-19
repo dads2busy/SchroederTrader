@@ -42,6 +42,7 @@ from schroeder_trader.config import (
     KELLY_MULTIPLIER,
     KELLY_WIN_LOSS_RATIO,
     PROJECT_ROOT,
+    SHADOW_BASKET_WEIGHTS,
     SHADOW_TICKERS,
     TICKER,
     TRAILING_STOP_PCT,
@@ -499,7 +500,11 @@ def _run_pipeline_inner(conn) -> None:
     # ticker (XLK etc.) and log to shadow_signals.csv. Validated by backtest;
     # not yet wired into trading or the email. Wrapped per-ticker so a single
     # ticker failure doesn't stop the others.
+    # SPY's df is the main pipeline's already-fetched bars; include it so the
+    # SECTOR SHADOW basket row can compute the weighted basket P&L.
     sector_close_histories: dict[str, pd.Series] = {}
+    if "close" in df.columns:
+        sector_close_histories[TICKER] = df["close"]
     if FEATURES_CSV_PATH.exists():
         try:
             ext_df_shadow = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
@@ -553,6 +558,7 @@ def _run_pipeline_inner(conn) -> None:
             spy_history=df,
             live_start_date=date(2026, 4, 15),  # first day of paper trading
             sector_close_histories=sector_close_histories,
+            basket_weights=SHADOW_BASKET_WEIGHTS,
         )
         send_daily_summary(
             portfolio_value=account["portfolio_value"],
