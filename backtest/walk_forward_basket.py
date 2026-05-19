@@ -34,9 +34,10 @@ from backtest.optimize_basket_weights import (
 )
 
 TRAIN_YEARS = 5
-EVAL_MONTHS = 12
+EVAL_MONTHS = 12       # length of each evaluation window
+STEP_MONTHS = 6        # advance origin by this many months between windows
 STEP = 0.05
-FIXED_WEIGHTS = np.array([0.40, 0.40, 0.10, 0.10])  # SPY, XLK, XLV, XLE
+FIXED_WEIGHTS = np.array([0.45, 0.30, 0.15, 0.10])  # SPY, XLK, XLV, XLE
 
 
 @dataclass
@@ -48,7 +49,13 @@ class Window:
 
 
 def build_windows(index: pd.DatetimeIndex) -> list[Window]:
-    """Rolling-origin windows: TRAIN_YEARS train → EVAL_MONTHS evaluate, step EVAL_MONTHS."""
+    """Rolling-origin windows: TRAIN_YEARS train → EVAL_MONTHS evaluate, step STEP_MONTHS.
+
+    When STEP_MONTHS < EVAL_MONTHS the evaluation windows overlap — each per-window
+    Sharpe is computed on an independent 12-month slice but adjacent windows share
+    months. The stitched OOS curve is built from non-overlapping sub-windows so the
+    cumulative return number stays interpretable.
+    """
     out: list[Window] = []
     start = index[0]
     cursor = start + pd.DateOffset(years=TRAIN_YEARS)
@@ -60,7 +67,7 @@ def build_windows(index: pd.DatetimeIndex) -> list[Window]:
         if eval_end > index[-1]:
             break
         out.append(Window(train_start, train_end, eval_start, eval_end))
-        cursor = cursor + pd.DateOffset(months=EVAL_MONTHS)
+        cursor = cursor + pd.DateOffset(months=STEP_MONTHS)
     return out
 
 
@@ -80,7 +87,7 @@ def main():
     windows = build_windows(returns.index)
 
     print(f"Walk-forward setup: train={TRAIN_YEARS}y, eval={EVAL_MONTHS}m, "
-          f"step={EVAL_MONTHS}m, weight grid step={STEP}")
+          f"step={STEP_MONTHS}m, weight grid step={STEP}")
     print(f"Data: {returns.index.min().date()} → {returns.index.max().date()} "
           f"({len(returns)} sessions)")
     print(f"Windows: {len(windows)}  "
@@ -114,8 +121,16 @@ def main():
             "opt_sharpe_oos": opt_sharpe,
             "fixed_sharpe_oos": fix_sharpe,
         })
-        optimized_oos.append(pd.Series(opt_eval_returns, index=eval_ret.index))
-        fixed_oos.append(pd.Series(fix_eval_returns, index=eval_ret.index))
+        # For the stitched OOS curve, take only the first STEP_MONTHS of each
+        # window so adjacent windows don't double-count overlapping months.
+        stitch_end = w.eval_start + pd.DateOffset(months=STEP_MONTHS) - pd.Timedelta(days=1)
+        stitch_mask = np.asarray(
+            (eval_ret.index >= w.eval_start) & (eval_ret.index <= stitch_end)
+        )
+        if stitch_mask.any():
+            stitch_idx = eval_ret.index[stitch_mask]
+            optimized_oos.append(pd.Series(opt_eval_returns[stitch_mask], index=stitch_idx))
+            fixed_oos.append(pd.Series(fix_eval_returns[stitch_mask], index=stitch_idx))
 
     df_windows = pd.DataFrame(rows)
     print("=== Per-window picks (max-Sharpe on training window) ===")
@@ -131,12 +146,37 @@ def main():
     opt_curve = pd.concat(optimized_oos).sort_index()
     fix_curve = pd.concat(fixed_oos).sort_index()
 
-    print("=== Stitched out-of-sample performance ===")
+    # Per-window standard error of the difference (fixed - re-optimized).
+    # If |mean_diff| > 2 SE, the fixed mix is meaningfully better at α≈0.05.
+    diff = df_windows["fixed_sharpe_oos"] - df_windows["opt_sharpe_oos"]
+    mean_diff = diff.mean()
+    se_diff = diff.std(ddof=1) / np.sqrt(len(diff)) if len(diff) > 1 else float("nan")
+    wins = int((diff > 0).sum())
+    print(f"  Per-window Sharpe(fixed) − Sharpe(re-opt):  "
+          f"mean {mean_diff:+.3f}  SE {se_diff:.3f}  "
+          f"(fixed wins {wins}/{len(diff)})")
+    print()
+
+    print("=== Stitched out-of-sample performance (non-overlapping sub-windows) ===")
     print(f"  {'Strategy':<32}{'Sharpe':>8}{'Return %':>12}{'MaxDD %':>10}")
-    for label, series in [
+    candidate_curves = [
         ("Walk-forward re-optimized", opt_curve),
-        ("Fixed 40/40/10/10",         fix_curve),
-    ]:
+        (f"Fixed {'/'.join(f'{int(round(w*100))}' for w in FIXED_WEIGHTS)}", fix_curve),
+    ]
+    # Also run each comparison candidate over the same stitched index
+    extra_candidates = {
+        "40/40/10/10 (max in-sample return)": np.array([0.40, 0.40, 0.10, 0.10]),
+        "35/35/20/10 (in-sample max-Sharpe)": np.array([0.35, 0.35, 0.20, 0.10]),
+        "Equal weight 25/25/25/25":           np.array([0.25, 0.25, 0.25, 0.25]),
+    }
+    stitch_index = opt_curve.index
+    aligned_returns = returns.loc[stitch_index]
+    for label, w in extra_candidates.items():
+        candidate_curves.append((
+            label,
+            pd.Series(aligned_returns[TICKERS].to_numpy() @ w, index=stitch_index),
+        ))
+    for label, series in candidate_curves:
         s, r, dd = metrics(series)
         print(f"  {label:<32}{s:>8.2f}{r:>12.1f}{dd:>10.2f}")
 
