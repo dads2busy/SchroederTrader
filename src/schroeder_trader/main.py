@@ -541,7 +541,7 @@ def _run_pipeline_inner(conn) -> None:
         basket_state = None
         try:
             pf_all = pd.read_csv(Path(DB_PATH).parent / "portfolio.csv")
-            if (pf_all.get("pipeline") == "basket").any():
+            if "pipeline" in pf_all.columns and (pf_all["pipeline"] == "basket").any():
                 ss_all = pd.read_csv(Path(DB_PATH).parent / "shadow_signals.csv")
                 # Launch date = earliest basket timestamp's date
                 basket_first_ts = pf_all[pf_all["pipeline"] == "basket"]["timestamp"].min()

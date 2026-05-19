@@ -514,8 +514,8 @@ def build_basket_paper_section(
         f"  Cash sleeve:  {_fmt_dollars(cash)} ({cash_pct:.1f}%)",
         "",
         f"  {'Ticker':<7} {'Target':>7} {'Actual':>7} {'Position':>9}  "
-        f"{'Value':>10}  {'Signal':<14} {'Stop':>5}",
-        f"  {'-'*7} {'-'*7} {'-'*7} {'-'*9}  {'-'*10}  {'-'*14} {'-'*5}",
+        f"{'Value':>10}  {'Signal':<21} {'Stop':>5}",
+        f"  {'-'*7} {'-'*7} {'-'*7} {'-'*9}  {'-'*10}  {'-'*21} {'-'*5}",
     ]
     warnings: list[str] = []
     for ticker in basket_weights:
@@ -536,8 +536,8 @@ def build_basket_paper_section(
         stop_label = "FIRED" if stop_fired else "OK"
         lines.append(
             f"  {ticker:<7} {target_pct:>6.1f}% {actual_pct:>6.1f}% "
-            f"{position_qty:>5} sh  {_fmt_dollars(position_value):>10}  "
-            f"{signal+' ('+source+')':<14} {stop_label:>5}"
+            f"{position_qty:>6} sh  {_fmt_dollars(position_value):>10}  "
+            f"{signal+' ('+source+')':<21} {stop_label:>5}"
         )
         if stop_fired and ss_row is not None and pd.notna(ss_row["high_water_mark"]):
             warnings.append(

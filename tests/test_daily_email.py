@@ -618,6 +618,45 @@ def test_build_basket_paper_section_returns_empty_when_no_basket_rows():
     assert section == ""
 
 
+def test_build_basket_paper_section_renders_xgb_bear_weak_source():
+    """Long signal_source (XGB_BEAR_WEAK) shouldn't break column alignment."""
+    from schroeder_trader.reports.daily_email import build_basket_paper_section
+    from datetime import date
+
+    portfolio_df = pd.DataFrame({
+        "timestamp": ["2026-05-12T20:30:00+00:00"],
+        "pipeline": ["basket"],
+        "ticker": ["XLV"],
+        "cash": [500.0],
+        "position_qty": [107],
+        "position_value": [15763.0],
+        "total_value": [100000.0],
+    })
+    shadow_signals_df = pd.DataFrame({
+        "timestamp": ["2026-05-12T20:30:00+00:00"],
+        "pipeline": ["basket"],
+        "ticker": ["XLV"],
+        "ml_signal": ["BUY"],
+        "signal_source": ["XGB_BEAR_WEAK"],
+        "trailing_stop_triggered": [0],
+        "high_water_mark": [15763.0],
+    })
+    section = build_basket_paper_section(
+        portfolio_df=portfolio_df,
+        shadow_signals_df=shadow_signals_df,
+        basket_weights={"XLV": 1.0},
+        launch_date=date(2026, 5, 12),
+    )
+    # The signal+source should appear fully (not truncated)
+    assert "BUY (XGB_BEAR_WEAK)" in section
+    # All rendered lines should have the same length (no alignment drift)
+    lines = [ln for ln in section.split("\n") if ln.strip().startswith(("Ticker", "----", "XLV"))]
+    # At least header, separator, and data row
+    assert len(lines) >= 3
+    lengths = set(len(ln.rstrip()) for ln in lines)
+    assert len(lengths) == 1, f"Lines have inconsistent widths: {lengths}"
+
+
 def test_build_email_body_omits_basket_section_when_basket_state_is_none(tmp_path):
     from datetime import date
     dates = pd.bdate_range("2026-04-15", periods=10).tz_localize(None)
