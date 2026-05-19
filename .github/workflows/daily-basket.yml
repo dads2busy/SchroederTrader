@@ -1,0 +1,69 @@
+name: daily-basket
+
+on:
+  # No schedule yet — flipped to scheduled in Task 7 once Phase C is verified.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Test run: doesn't commit state"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: trading-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run basket pipeline
+        id: pipeline
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_BASE_URL: ${{ secrets.ALPACA_BASE_URL }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: uv run python -m schroeder_trader.basket.main
+
+      - name: Commit state
+        if: always() && inputs.dry_run != true
+        run: |
+          git config user.name  "schroedertrader-bot"
+          git config user.email "bot@schroedertrader.local"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "No state changes to commit"
+            exit 0
+          fi
+          git commit -m "chore: basket state $(date -u +%Y-%m-%d)"
+          for attempt in 1 2 3; do
+            if git pull --rebase --autostash origin "$GITHUB_REF_NAME" && git push; then
+              echo "Pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; retrying in 5s"
+            sleep 5
+          done
+          echo "Failed to push state after 3 attempts" >&2
+          exit 1
