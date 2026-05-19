@@ -17,7 +17,7 @@ import pandas as pd
 from schroeder_trader.config import (
     DB_PATH, FEATURES_CSV_PATH, SHADOW_BASKET_WEIGHTS,
 )
-from schroeder_trader.execution.broker import submit_order, get_position, get_account
+from schroeder_trader.execution.broker import get_position, get_account
 from schroeder_trader.execution.reconcile import reconcile_orders
 from schroeder_trader.storage.csv_store import CsvStore
 
