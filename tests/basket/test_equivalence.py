@@ -13,9 +13,10 @@ This is the only scenario where exact equivalence holds by design:
   submit no orders, and end with all-cash portfolios. Exact equivalence
   is both meaningful and verifiable on these days.
 
-The stateful broker mock updates positions on submit_order and computes
-get_account from post-fill state. close_price is read from the recorded
-shadow_signals.csv value on each fixture date (not derived).
+The SimulatedBroker (production class) is cold-started from the fixture's
+spy_only total_value, matching broker_state.json's initial cash. On FLAT
+days no orders are submitted, so positions stay at zero and total_value
+equals cash.
 
 Fixture dates chosen:
 - 2026-03-31: BEAR/FLAT, qty=0, close=650.34 (mid-bear-run)
@@ -26,7 +27,7 @@ Fixture dates chosen:
 import json
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -35,26 +36,6 @@ import pytest
 _FIXTURES = Path(__file__).parent / "fixtures"
 
 FIXTURE_DAYS = sorted(d.name for d in _FIXTURES.iterdir() if d.is_dir()) if _FIXTURES.exists() else []
-
-
-class _StatefulBroker:
-    def __init__(self, initial_positions: dict, cash: float, close_price: float):
-        self.positions = dict(initial_positions)
-        self.cash = cash
-        self.close_price = close_price
-
-    def get_position(self, ticker):
-        return self.positions.get(ticker, 0)
-
-    def get_account(self):
-        equity = sum(qty * self.close_price for qty in self.positions.values())
-        return {"cash": self.cash, "portfolio_value": self.cash + equity}
-
-    def submit_order(self, request, ticker):
-        signed_qty = request.quantity if request.action == "BUY" else -request.quantity
-        self.positions[ticker] = self.positions.get(ticker, 0) + signed_qty
-        self.cash -= signed_qty * self.close_price
-        return MagicMock(alpaca_order_id=f"test-{ticker}-{signed_qty}", status="FILLED")
 
 
 @pytest.mark.parametrize("fixture_date", FIXTURE_DAYS)
@@ -71,7 +52,6 @@ def test_basket_with_spy_only_weight_matches_spy_only_pipeline(
         if src.exists():
             (tmp_path / f).write_text(src.read_text())
 
-    broker_state = json.loads((snapshot_dir / "broker_state.json").read_text())
     expected = json.loads((snapshot_dir / "expected_state.json").read_text())
 
     from schroeder_trader.strategy.composite import Signal
@@ -82,24 +62,12 @@ def test_basket_with_spy_only_weight_matches_spy_only_pipeline(
     recorded_source = expected["signal_source"]
     close_price = float(expected["close_price"])
 
-    broker = _StatefulBroker(
-        initial_positions=broker_state["positions"],
-        cash=float(broker_state["account"]["cash"]),
-        close_price=close_price,
-    )
-
     from schroeder_trader.basket.main import run_basket_pipeline
 
     now = datetime.fromisoformat(f"{fixture_date}T20:25:00+00:00")
 
     with patch("schroeder_trader.basket.orchestrator._compute_signal_for_ticker") as mock_sig, \
-         patch("schroeder_trader.basket.main.get_position",
-               side_effect=lambda t: broker.get_position(t)), \
-         patch("schroeder_trader.basket.main.get_account",
-               side_effect=lambda: broker.get_account()), \
-         patch("schroeder_trader.basket.rebalance.submit_order",
-               side_effect=lambda req, ticker: broker.submit_order(req, ticker)), \
-         patch("schroeder_trader.basket.main.reconcile_orders", return_value=[]):
+         patch("schroeder_trader.basket.main.subprocess.run"):
         mock_sig.return_value = (
             recorded_signal,
             recorded_source,

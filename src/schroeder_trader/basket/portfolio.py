@@ -2,7 +2,8 @@
 
 Reads and writes rows in shared CSVs (portfolio.csv, shadow_signals.csv)
 filtered to pipeline='basket'. SPY-only rows are ignored except as a
-fallback during first-ever basket-pipeline run (see bootstrap_starting_value).
+fallback during first-ever basket-pipeline run (see bootstrap_starting_value
+and load_basket_broker).
 """
 
 from __future__ import annotations
@@ -13,6 +14,72 @@ import pandas as pd
 
 from schroeder_trader.storage.csv_store import CsvStore
 from schroeder_trader.storage.trade_log import log_portfolio
+
+
+class SimulatedBroker:
+    """Pure-software broker for the basket's paper-trading simulation.
+
+    Tracks cash and per-ticker positions in memory during a single
+    pipeline run. State is loaded from portfolio.csv basket rows at the
+    start, mutated by submit_order during rebalancing, and persisted
+    back to portfolio.csv via write_basket_portfolio_snapshot.
+
+    Does NOT call Alpaca. Switching to live trading later (Phase E)
+    would replace this with the real broker module.
+    """
+
+    def __init__(self, cash: float, positions: dict[str, int], prices: dict[str, float]):
+        self.cash = float(cash)
+        self.positions: dict[str, int] = dict(positions)
+        self.prices: dict[str, float] = dict(prices)
+
+    def get_position(self, ticker: str) -> int:
+        return int(self.positions.get(ticker, 0))
+
+    def get_account(self) -> dict:
+        equity = sum(qty * self.prices.get(t, 0.0) for t, qty in self.positions.items())
+        return {"cash": self.cash, "portfolio_value": self.cash + equity}
+
+    def submit_order(self, ticker: str, action: str, qty: int) -> dict:
+        signed_qty = qty if action == "BUY" else -qty
+        price = self.prices[ticker]
+        self.positions[ticker] = self.get_position(ticker) + signed_qty
+        self.cash -= signed_qty * price
+        return {"alpaca_order_id": f"sim-{ticker}-{signed_qty}", "status": "FILLED"}
+
+
+def load_basket_broker(store: CsvStore, prices: dict[str, float]) -> SimulatedBroker:
+    """Load the basket's simulated broker state from portfolio.csv.
+
+    Warm start: if pipeline='basket' rows exist, read cash and per-ticker
+    positions from the latest snapshot (one row per ticker, all sharing
+    the same timestamp).
+
+    Cold start: no basket rows. Use SPY-only's latest total_value as
+    starting cash and empty positions.
+    """
+    df = store.read("portfolio")
+    if df.empty:
+        raise RuntimeError("no portfolio history to bootstrap from")
+
+    basket = df[df["pipeline"] == "basket"]
+    if not basket.empty:
+        latest_ts = basket["timestamp"].max()
+        latest_rows = basket[basket["timestamp"] == latest_ts]
+        cash = float(latest_rows.iloc[0]["cash"])
+        positions = {row["ticker"]: int(row["position_qty"])
+                     for _, row in latest_rows.iterrows()}
+        return SimulatedBroker(cash=cash, positions=positions, prices=prices)
+
+    spy_only = df[df["pipeline"] == "spy_only"]
+    if spy_only.empty:
+        raise RuntimeError("no portfolio history to bootstrap from")
+    latest = spy_only.sort_values("timestamp").iloc[-1]
+    return SimulatedBroker(
+        cash=float(latest["total_value"]),  # cold start: all cash, no positions
+        positions={},
+        prices=prices,
+    )
 
 
 def bootstrap_starting_value(store: CsvStore) -> float:
@@ -89,23 +156,21 @@ def read_trading_dates(store: CsvStore, ticker: str) -> list[date]:
 
 def write_basket_portfolio_snapshot(
     store: CsvStore,
-    broker,
+    broker: SimulatedBroker,
     tickers: list[str],
-    prices: dict[str, float],
     now: datetime,
 ) -> None:
     """Write one portfolio.csv row per ticker with pipeline='basket'.
 
-    `prices` is the closing price per ticker used to compute position_value.
-    The shared basket cash and total portfolio value are repeated on every
-    row (each row is a self-contained snapshot for that ticker).
+    Reads final cash, positions, and total_value from the SimulatedBroker
+    after rebalancing. Each row is a self-contained snapshot.
     """
     account = broker.get_account()
     cash = float(account["cash"])
     total_value = float(account["portfolio_value"])
     for ticker in tickers:
-        qty = int(broker.get_position(ticker))
-        position_value = qty * prices[ticker]
+        qty = broker.get_position(ticker)
+        position_value = qty * broker.prices.get(ticker, 0.0)
         log_portfolio(
             store, now, cash, qty, position_value, total_value,
             pipeline="basket", ticker=ticker,

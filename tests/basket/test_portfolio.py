@@ -1,12 +1,13 @@
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
 
 from schroeder_trader.basket.portfolio import (
+    SimulatedBroker,
     bootstrap_starting_value,
+    load_basket_broker,
     read_position_qty,
     prior_exposure,
     read_trading_dates,
@@ -169,19 +170,71 @@ def test_write_basket_portfolio_snapshot_emits_one_row_per_ticker(tmp_path):
     pf_empty.to_csv(tmp_path / "portfolio.csv", index=False)
     store = _make_store(tmp_path)
 
-    fake_broker = MagicMock()
-    fake_broker.get_position.side_effect = lambda t: {"SPY": 64, "XLK": 181}.get(t, 0)
-    fake_broker.get_account.return_value = {"cash": 500.0, "portfolio_value": 105000.0}
-
-    prices = {"SPY": 738.0, "XLK": 175.0}
-    now = datetime(2026, 5, 21, 20, 30, tzinfo=timezone.utc)
-    write_basket_portfolio_snapshot(
-        store, fake_broker, ["SPY", "XLK"], prices, now,
+    broker = SimulatedBroker(
+        cash=500.0,
+        positions={"SPY": 64, "XLK": 181},
+        prices={"SPY": 738.0, "XLK": 175.0},
     )
+
+    now = datetime(2026, 5, 21, 20, 30, tzinfo=timezone.utc)
+    write_basket_portfolio_snapshot(store, broker, ["SPY", "XLK"], now)
 
     pf = pd.read_csv(tmp_path / "portfolio.csv")
     assert len(pf) == 2
     assert (pf["pipeline"] == "basket").all()
     assert set(pf["ticker"]) == {"SPY", "XLK"}
-    assert (pf["total_value"] == 105000.0).all()  # repeated on each row
+    expected_total = 500.0 + 64 * 738.0 + 181 * 175.0
+    assert all(abs(v - expected_total) < 0.01 for v in pf["total_value"])
     assert (pf["cash"] == 500.0).all()
+
+
+def test_simulated_broker_submit_order_updates_position_and_cash():
+    broker = SimulatedBroker(cash=10000.0, positions={"SPY": 0}, prices={"SPY": 100.0})
+    result = broker.submit_order("SPY", "BUY", 50)
+    assert result["status"] == "FILLED"
+    assert broker.get_position("SPY") == 50
+    assert broker.cash == 5000.0  # 10000 - 50*100
+    # SELL flow
+    broker.submit_order("SPY", "SELL", 20)
+    assert broker.get_position("SPY") == 30
+    assert broker.cash == 7000.0  # 5000 + 20*100
+
+
+def test_load_basket_broker_cold_start_uses_spy_only_total(tmp_path):
+    pd.DataFrame({
+        "id": [1], "timestamp": ["2026-05-19T20:30:00+00:00"],
+        "pipeline": ["spy_only"], "ticker": ["SPY"],
+        "cash": [1965.4], "position_qty": [141],
+        "position_value": [100000.0], "total_value": [101965.4],
+    }).to_csv(tmp_path / "portfolio.csv", index=False)
+    store = _make_store(tmp_path)
+    broker = load_basket_broker(store, prices={"SPY": 700.0, "XLK": 175.0})
+    assert broker.cash == 101965.4
+    assert broker.get_position("SPY") == 0
+    assert broker.get_position("XLK") == 0
+
+
+def test_load_basket_broker_warm_start_uses_latest_basket_rows(tmp_path):
+    pd.DataFrame({
+        "id": [1, 2, 3, 4, 5],
+        "timestamp": [
+            "2026-05-18T20:30:00+00:00",
+            "2026-05-19T20:30:00+00:00",
+            "2026-05-19T20:30:00+00:00",
+            "2026-05-19T20:30:00+00:00",
+            "2026-05-19T20:30:00+00:00",
+        ],
+        "pipeline": ["spy_only", "basket", "basket", "basket", "basket"],
+        "ticker": ["SPY", "SPY", "XLK", "XLV", "XLE"],
+        "cash": [1965.4, 500.0, 500.0, 500.0, 500.0],
+        "position_qty": [141, 64, 181, 111, 175],
+        "position_value": [100000.0, 47000.0, 32000.0, 16000.0, 10000.0],
+        "total_value": [101965.4, 105500.0, 105500.0, 105500.0, 105500.0],
+    }).to_csv(tmp_path / "portfolio.csv", index=False)
+    store = _make_store(tmp_path)
+    broker = load_basket_broker(store, prices={"SPY": 738.0, "XLK": 175.0, "XLV": 146.0, "XLE": 58.0})
+    assert broker.cash == 500.0
+    assert broker.get_position("SPY") == 64
+    assert broker.get_position("XLK") == 181
+    assert broker.get_position("XLV") == 111
+    assert broker.get_position("XLE") == 175

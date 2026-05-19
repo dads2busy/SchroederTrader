@@ -1,16 +1,11 @@
-"""Basket rebalancer — current vs target → order diffs.
-
-Pure compute_orders function for testability. rebalance_to_targets is
-the side-effecting wrapper that calls the broker and logs orders.
-"""
+"""Basket rebalancer — current vs target → order diffs."""
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime
 
-from schroeder_trader.execution.broker import OrderResult, submit_order
-from schroeder_trader.risk.risk_manager import OrderRequest
+from schroeder_trader.basket.portfolio import SimulatedBroker
 from schroeder_trader.storage.csv_store import CsvStore
 from schroeder_trader.storage.trade_log import log_order
 
@@ -56,33 +51,27 @@ def compute_orders(
 
 def rebalance_to_targets(
     store: CsvStore,
-    portfolio_value: float,
+    broker: SimulatedBroker,
     weights: dict[str, float],
     decisions: dict[str, dict],
-    current_positions: dict[str, int],
     now: datetime,
 ) -> list[dict]:
-    """Submit market orders for each ticker's diff and log them.
-
-    Returns the list of orders submitted (each enriched with `alpaca_order_id`
-    and `status` from the broker response). Errors on individual orders are
-    logged but don't stop the loop — the basket pipeline is paper-mode and
-    a single ticker failing is non-fatal.
-    """
+    """Submit simulated orders to update broker state, log to orders.csv."""
+    portfolio_value = broker.get_account()["portfolio_value"]
+    current_positions = {t: broker.get_position(t) for t in weights}
     orders = compute_orders(portfolio_value, weights, decisions, current_positions)
     submitted: list[dict] = []
     for o in orders:
         try:
-            req = OrderRequest(action=o["action"], quantity=o["qty"])
-            result = submit_order(req, ticker=o["ticker"])
+            result = broker.submit_order(o["ticker"], o["action"], o["qty"])
             log_order(
-                store, signal_id=0, alpaca_order_id=result.alpaca_order_id,
+                store, signal_id=0, alpaca_order_id=result["alpaca_order_id"],
                 timestamp=now, ticker=o["ticker"], action=o["action"],
-                quantity=o["qty"], status=result.status,
+                quantity=o["qty"], status=result["status"],
                 signal_close_price=o["price"], pipeline="basket",
             )
-            submitted.append({**o, "alpaca_order_id": result.alpaca_order_id, "status": result.status})
+            submitted.append({**o, "alpaca_order_id": result["alpaca_order_id"], "status": result["status"]})
         except Exception:
-            logger.exception("Basket order failed for %s (non-fatal)", o["ticker"])
+            logger.exception("Basket simulated order failed for %s (non-fatal)", o["ticker"])
             submitted.append({**o, "alpaca_order_id": None, "status": "ERROR"})
     return submitted

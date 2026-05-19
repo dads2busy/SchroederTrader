@@ -1,4 +1,10 @@
-from schroeder_trader.basket.rebalance import compute_orders
+from datetime import datetime, timezone
+
+import pandas as pd
+
+from schroeder_trader.basket.rebalance import compute_orders, rebalance_to_targets
+from schroeder_trader.basket.portfolio import SimulatedBroker
+from schroeder_trader.storage.csv_store import CsvStore
 
 
 def _decisions(**overrides):
@@ -68,3 +74,36 @@ def test_compute_orders_no_orders_when_all_at_target():
     current = {"SPY": 60, "XLK": 170, "XLV": 102, "XLE": 172}
     orders = compute_orders(100_000.0, WEIGHTS, decisions, current)
     assert orders == []
+
+
+def test_rebalance_to_targets_updates_broker_and_logs_orders(tmp_path):
+    pd.DataFrame(columns=[
+        "id", "signal_id", "alpaca_order_id", "timestamp", "pipeline",
+        "ticker", "action", "quantity", "fill_price", "fill_timestamp",
+        "status", "signal_close_price", "slippage",
+    ]).to_csv(tmp_path / "orders.csv", index=False)
+    store = CsvStore(tmp_path)
+
+    broker = SimulatedBroker(
+        cash=100000.0, positions={},
+        prices={"SPY": 700.0, "XLK": 175.0, "XLV": 146.0, "XLE": 58.0},
+    )
+    weights = {"SPY": 0.45, "XLK": 0.30, "XLV": 0.15, "XLE": 0.10}
+    decisions = {
+        "SPY": {"exposure": 1.0, "price": 700.0},
+        "XLK": {"exposure": 1.0, "price": 175.0},
+        "XLV": {"exposure": 1.0, "price": 146.0},
+        "XLE": {"exposure": 1.0, "price": 58.0},
+    }
+    now = datetime(2026, 5, 21, 20, 20, tzinfo=timezone.utc)
+    rebalance_to_targets(store, broker, weights, decisions, now)
+
+    # Each ticker should have bought toward target
+    assert broker.get_position("SPY") == int(100000 * 0.45 / 700)
+    assert broker.get_position("XLK") == int(100000 * 0.30 / 175)
+    assert broker.get_position("XLV") == int(100000 * 0.15 / 146)
+    assert broker.get_position("XLE") == int(100000 * 0.10 / 58)
+    # Orders logged with pipeline='basket'
+    orders_df = pd.read_csv(tmp_path / "orders.csv")
+    assert (orders_df["pipeline"] == "basket").all()
+    assert len(orders_df) == 4

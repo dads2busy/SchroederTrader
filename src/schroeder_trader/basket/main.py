@@ -1,9 +1,8 @@
 """Basket paper-trading pipeline entry point.
 
-Invoked by .github/workflows/daily-basket.yml at 21:20 UTC.
-Computes per-ticker decisions, rebalances to target weights, writes per-
-ticker portfolio snapshots. Does NOT send email — the SPY-only pipeline
-(running at 21:30 UTC) reads basket state and renders the unified email.
+Software-simulated: maintains its own portfolio state in basket rows of
+portfolio.csv. Does NOT call Alpaca. The SPY-only pipeline at 21:30 UTC
+reads basket state and renders the unified email.
 """
 
 from __future__ import annotations
@@ -19,13 +18,12 @@ import pandas as pd
 from schroeder_trader.config import (
     DB_PATH, FEATURES_CSV_PATH, PROJECT_ROOT, SHADOW_BASKET_WEIGHTS,
 )
-from schroeder_trader.execution.broker import get_position, get_account
-from schroeder_trader.execution.reconcile import reconcile_orders
 from schroeder_trader.storage.csv_store import CsvStore
 
 from schroeder_trader.basket.orchestrator import compute_decisions
 from schroeder_trader.basket.portfolio import (
     bootstrap_starting_value,
+    load_basket_broker,
     write_basket_portfolio_snapshot,
 )
 from schroeder_trader.basket.rebalance import rebalance_to_targets
@@ -51,17 +49,7 @@ def run_basket_pipeline(
 
     store = CsvStore(data_dir)
 
-    # 1. Reconcile orphaned orders per ticker (paper account).
-    for ticker in weights:
-        try:
-            reconcile_orders(store, ticker)
-        except Exception:
-            logger.exception("Reconcile failed for %s (non-fatal)", ticker)
-
-    # 2. Bootstrap portfolio value.
-    portfolio_value = bootstrap_starting_value(store)
-
-    # 3. Download external features (idempotent, skips if <24h old), then load.
+    # 1. Download external features (idempotent, skips if <24h old), then load.
     try:
         logger.info("Downloading external features...")
         result = subprocess.run(
@@ -84,29 +72,22 @@ def run_basket_pipeline(
     if FEATURES_CSV_PATH.exists():
         ext_df = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
 
-    # 4. Compute per-ticker decisions (logs shadow_signals rows with pipeline='basket').
+    # 2. Get current portfolio value for orchestrator (used by trailing stop).
+    #    Use the previously-saved total_value before prices are loaded.
+    portfolio_value = bootstrap_starting_value(store)
+
+    # 3. Compute per-ticker decisions (logs shadow_signals rows with pipeline='basket').
     decisions = compute_decisions(store, weights, ext_df, now, portfolio_value)
 
-    # 5. Read current positions from broker.
-    current_positions = {t: int(get_position(t)) for t in weights}
-
-    # 6. Rebalance to targets — submit orders, log to orders.csv with pipeline='basket'.
-    rebalance_to_targets(
-        store, portfolio_value, weights, decisions, current_positions, now,
-    )
-
-    # 7. Read updated positions from broker after fills.
+    # 4. Build prices dict from decisions and load the simulated broker.
     prices = {t: decisions[t]["price"] for t in weights}
+    broker = load_basket_broker(store, prices)
 
-    class _BrokerAdapter:
-        @staticmethod
-        def get_position(t):
-            return get_position(t)
-        @staticmethod
-        def get_account():
-            return get_account()
+    # 5. Rebalance to targets — updates broker state, logs orders.
+    rebalance_to_targets(store, broker, weights, decisions, now)
 
-    write_basket_portfolio_snapshot(store, _BrokerAdapter, list(weights), prices, now)
+    # 6. Write per-ticker portfolio snapshot from broker's final state.
+    write_basket_portfolio_snapshot(store, broker, list(weights), now)
 
     logger.info("Basket pipeline complete. Wrote %d ticker rows.", len(weights))
 
