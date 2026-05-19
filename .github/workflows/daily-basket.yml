@@ -1,10 +1,14 @@
 name: daily-basket
 
 on:
-  schedule:
-    # 21:20 UTC = 16:20 EST = 17:20 EDT. Runs 10 minutes before the
-    # SPY-only pipeline so the unified email can read basket state.
-    - cron: '20 21 * * 1-5'
+  # SCHEDULE DISABLED 2026-05-19 after first live run revealed a critical
+  # architectural issue: this pipeline shares the Alpaca paper account with
+  # the SPY-only pipeline. On first run with no prior basket history,
+  # prior_exposure(SPY)=0 produced a flatten-to-zero rebalance that SOLD
+  # SPY-only's existing 141 SPY position. The basket cannot share an Alpaca
+  # account with SPY-only — either needs separate paper credentials or a
+  # software-simulated portfolio. Reverted to workflow_dispatch only until
+  # the architecture is fixed.
   workflow_dispatch:
     inputs:
       dry_run:
