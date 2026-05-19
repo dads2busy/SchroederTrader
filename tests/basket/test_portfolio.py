@@ -98,6 +98,30 @@ def test_prior_exposure_returns_one_when_last_signal_was_buy(tmp_path):
     assert prior_exposure(store, "XLK") == 1.0  # HOLD walks back to BUY
 
 
+def test_prior_exposure_returns_zero_when_last_decided_was_sell_then_hold(tmp_path):
+    ss = pd.DataFrame({
+        "id": [1, 2],
+        "timestamp": ["2026-05-19T20:30:00+00:00", "2026-05-20T20:30:00+00:00"],
+        "pipeline": ["basket", "basket"],
+        "ticker": ["XLK", "XLK"],
+        "close_price": [100.0, 105.0],
+        "predicted_class": [None, None],
+        "predicted_proba": [None, None],
+        "ml_signal": ["SELL", "HOLD"],
+        "sma_signal": ["SELL", "HOLD"],
+        "regime": ["BEAR", "BEAR"],
+        "signal_source": ["FLAT", "FLAT"],
+        "bear_day_count": [None, None],
+        "kelly_fraction": [None, None],
+        "kelly_qty": [None, None],
+        "high_water_mark": [None, None],
+        "trailing_stop_triggered": [None, None],
+    })
+    ss.to_csv(tmp_path / "shadow_signals.csv", index=False)
+    store = _make_store(tmp_path)
+    assert prior_exposure(store, "XLK") == 0.0  # HOLD walks back to SELL
+
+
 def test_prior_exposure_returns_zero_when_no_prior_basket_rows(tmp_path):
     pd.DataFrame(columns=[
         "id", "timestamp", "pipeline", "ticker", "close_price",

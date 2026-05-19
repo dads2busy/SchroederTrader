@@ -84,7 +84,7 @@ def read_trading_dates(store: CsvStore, ticker: str) -> list[date]:
         return []
     rows["date"] = pd.to_datetime(rows["timestamp"], utc=True, format="ISO8601") \
         .dt.tz_convert("America/New_York").dt.date
-    return list(rows.sort_values("date")["date"])
+    return sorted(set(rows["date"]))
 
 
 def write_basket_portfolio_snapshot(
