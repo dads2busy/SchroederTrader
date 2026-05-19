@@ -499,12 +499,17 @@ def _run_pipeline_inner(conn) -> None:
     # ticker (XLK etc.) and log to shadow_signals.csv. Validated by backtest;
     # not yet wired into trading or the email. Wrapped per-ticker so a single
     # ticker failure doesn't stop the others.
+    sector_close_histories: dict[str, pd.DataFrame] = {}
     if FEATURES_CSV_PATH.exists():
         try:
             ext_df_shadow = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
             for shadow_ticker, shadow_model_path in SHADOW_TICKERS.items():
                 try:
-                    _run_shadow_for_ticker(conn, now, shadow_ticker, shadow_model_path, ext_df_shadow)
+                    ticker_df = _run_shadow_for_ticker(
+                        conn, now, shadow_ticker, shadow_model_path, ext_df_shadow,
+                    )
+                    if ticker_df is not None and "close" in ticker_df.columns:
+                        sector_close_histories[shadow_ticker] = ticker_df["close"]
                 except Exception:
                     logger.exception("Shadow ticker %s failed (non-fatal)", shadow_ticker)
         except Exception:
@@ -547,7 +552,7 @@ def _run_pipeline_inner(conn) -> None:
             data_root=Path(DB_PATH).parent,
             spy_history=df,
             live_start_date=date(2026, 4, 15),  # first day of paper trading
-            sector_close_histories={},  # TODO(Task 5): populate with real ticker histories
+            sector_close_histories=sector_close_histories,
         )
         send_daily_summary(
             portfolio_value=account["portfolio_value"],
@@ -565,20 +570,26 @@ def _run_pipeline_inner(conn) -> None:
     logger.info("Pipeline complete")
 
 
-def _run_shadow_for_ticker(conn, now: datetime, ticker: str, model_path: Path, ext_df) -> None:
+def _run_shadow_for_ticker(
+    conn, now: datetime, ticker: str, model_path: Path, ext_df,
+) -> pd.DataFrame | None:
     """Compute composite signal for a non-trading ticker; log to shadow_signals.
 
     No trailing stop, no Kelly, no oracles — just the regime + SMA + XGB +
     composite routing, written with ticker=ticker so it lives alongside SPY's
     production rows. Failures are non-fatal.
+
+    Returns the fetched daily-bars DataFrame (indexed by date, 'close' column)
+    so the caller can pass it to the email body for P&L rendering. Returns
+    None if the function exits early (no model, no features, etc.).
     """
     model = load_model(model_path)
     if model is None:
         logger.warning("Shadow %s: no model at %s, skipping", ticker, model_path)
-        return
+        return None
     if list(model.classes_) != [0, 1, 2]:
         logger.warning("Shadow %s: model classes %s mismatch, skipping", ticker, list(model.classes_))
-        return
+        return None
 
     df = fetch_daily_bars(ticker, days=600)
     close_price = float(df["close"].iloc[-1])
@@ -587,7 +598,7 @@ def _run_shadow_for_ticker(conn, now: datetime, ticker: str, model_path: Path, e
     features = pipeline.compute_features_extended(df, ext_df)
     if len(features) == 0:
         logger.warning("Shadow %s: no features computed", ticker)
-        return
+        return None
 
     regime_series = compute_regime_series(features)
     features["regime_label"] = compute_regime_labels(features)
@@ -608,7 +619,7 @@ def _run_shadow_for_ticker(conn, now: datetime, ticker: str, model_path: Path, e
     last_row = features[feature_cols].iloc[[-1]]
     if last_row.isna().any().any():
         logger.warning("Shadow %s: NaN in feature row, skipping", ticker)
-        return
+        return None
 
     class_to_idx = {int(c): i for i, c in enumerate(model.classes_)}
     idx_up = class_to_idx[2]
@@ -648,6 +659,7 @@ def _run_shadow_for_ticker(conn, now: datetime, ticker: str, model_path: Path, e
         ticker, composite_sig.value, source, today_regime.value,
         float(proba[idx_up]), sma_signal.value,
     )
+    return df
 
 
 def _deadline_handler(signum, frame):
