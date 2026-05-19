@@ -87,20 +87,8 @@ def test_compute_decisions_sell_signal_produces_flat_exposure(
 def test_compute_decisions_hold_carries_prior_basket_exposure(
     mock_sig, tmp_path,
 ):
-    # Seed prior basket BUY for SPY
-    ss = pd.DataFrame({
-        "id": [1], "timestamp": ["2026-05-20T20:30:00+00:00"],
-        "pipeline": ["basket"], "ticker": ["SPY"],
-        "close_price": [100.0],
-        "predicted_class": [None], "predicted_proba": [None],
-        "ml_signal": ["BUY"], "sma_signal": ["BUY"],
-        "regime": ["BULL"], "signal_source": ["SMA"],
-        "bear_day_count": [None], "kelly_fraction": [None],
-        "kelly_qty": [None], "high_water_mark": [None],
-        "trailing_stop_triggered": [None],
-    })
-    # Seed a prior basket row to make this a warm start (not cold start).
-    # Cold start overrides HOLD to 1.0; warm start makes HOLD walk back to BUY.
+    # Seed a prior basket portfolio row with position_qty > 0 to make this a
+    # warm start AND give prior_exposure=1.0. HOLD carries that forward.
     pf = pd.DataFrame({
         "id": [1], "timestamp": ["2026-05-20T20:30:00+00:00"],
         "pipeline": ["basket"], "ticker": ["SPY"],
@@ -108,7 +96,13 @@ def test_compute_decisions_hold_carries_prior_basket_exposure(
         "position_value": [99500.0], "total_value": [100000.0],
     })
     pf.to_csv(tmp_path / "portfolio.csv", index=False)
-    ss.to_csv(tmp_path / "shadow_signals.csv", index=False)
+    pd.DataFrame(columns=[
+        "id", "timestamp", "pipeline", "ticker", "close_price",
+        "predicted_class", "predicted_proba", "ml_signal", "sma_signal",
+        "regime", "signal_source", "bear_day_count",
+        "kelly_fraction", "kelly_qty", "high_water_mark",
+        "trailing_stop_triggered",
+    ]).to_csv(tmp_path / "shadow_signals.csv", index=False)
     store = CsvStore(tmp_path)
 
     mock_sig.return_value = _fake_signal_pipeline("HOLD", "SMA")
@@ -116,7 +110,7 @@ def test_compute_decisions_hold_carries_prior_basket_exposure(
     now = datetime(2026, 5, 21, 20, 30, tzinfo=timezone.utc)
 
     decisions = compute_decisions(store, weights, pd.DataFrame(), now, portfolio_value=100000.0)
-    assert decisions["SPY"]["exposure"] == 1.0  # HOLD carries prior BUY
+    assert decisions["SPY"]["exposure"] == 1.0  # HOLD carries prior position
 
 
 @patch("schroeder_trader.basket.orchestrator._compute_signal_for_ticker")
@@ -249,12 +243,13 @@ def test_compute_decisions_warm_start_after_first_basket_row_uses_prior_exposure
     mock_sig, tmp_path,
 ):
     """Once a prior basket row exists, cold-start force-invest no longer applies."""
-    # Seed a prior basket row (any signal, doesn't matter for cold-start detection)
+    # Seed a prior basket row with position_qty=0 so prior_exposure=0.
+    # This proves cold-start force-invest does NOT fire on a warm start.
     pf = pd.DataFrame({
         "id": [1], "timestamp": ["2026-05-20T20:30:00+00:00"],
         "pipeline": ["basket"], "ticker": ["SPY"],
-        "cash": [500.0], "position_qty": [64],
-        "position_value": [47000.0], "total_value": [105000.0],
+        "cash": [105000.0], "position_qty": [0],
+        "position_value": [0.0], "total_value": [105000.0],
     })
     pf.to_csv(tmp_path / "portfolio.csv", index=False)
     pd.DataFrame(columns=[
@@ -266,7 +261,7 @@ def test_compute_decisions_warm_start_after_first_basket_row_uses_prior_exposure
     ]).to_csv(tmp_path / "shadow_signals.csv", index=False)
     store = CsvStore(tmp_path)
 
-    # HOLD signal with no prior shadow row → prior_exposure=0 → exposure=0
+    # HOLD signal with prior_exposure=0 (basket row has qty=0) → exposure=0.
     # (NOT force-invested because basket already has a portfolio row)
     mock_sig.return_value = _fake_signal_pipeline("HOLD", "SMA")
     now = datetime(2026, 5, 21, 20, 30, tzinfo=timezone.utc)

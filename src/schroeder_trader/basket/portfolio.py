@@ -117,26 +117,24 @@ def read_position_qty(store: CsvStore, ticker: str) -> int:
 
 
 def prior_exposure(store: CsvStore, ticker: str) -> float:
-    """Latest decided exposure (0.0 or 1.0) for `ticker` from basket shadow
-    signals. Returns 0.0 when no prior basket signal exists (cold start).
+    """Return 1.0 if the basket currently holds `ticker` (latest basket
+    portfolio row has position_qty > 0), else 0.0.
 
-    Walks back through HOLD rows until it finds the last BUY or SELL,
-    matching the HOLD-carries-forward semantics of _exposure_from_decisions.
+    Position-based semantics: "invested iff holding shares." Used by the
+    orchestrator's HOLD branch to carry forward existing positions. This
+    is intentionally NOT signal-based — the cold-start force-invest
+    establishes positions on HOLD signals, and the position is what we
+    want to carry forward, not the signal that happened to fire that day.
     """
-    df = store.read("shadow_signals")
+    df = store.read("portfolio")
     if df.empty:
         return 0.0
     rows = df[(df["pipeline"] == "basket") & (df["ticker"] == ticker)]
     if rows.empty:
         return 0.0
-    chain = rows.sort_values("timestamp")
-    for _, r in chain[::-1].iterrows():
-        s = str(r["ml_signal"])
-        if s == "BUY":
-            return 1.0
-        if s == "SELL":
-            return 0.0
-    return 0.0
+    latest = rows.sort_values("timestamp").iloc[-1]
+    qty = int(latest["position_qty"]) if pd.notna(latest["position_qty"]) else 0
+    return 1.0 if qty > 0 else 0.0
 
 
 def is_basket_cold_start(store: CsvStore) -> bool:
