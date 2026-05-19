@@ -9,13 +9,15 @@ ticker portfolio snapshots. Does NOT send email — the SPY-only pipeline
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
 from schroeder_trader.config import (
-    DB_PATH, FEATURES_CSV_PATH, SHADOW_BASKET_WEIGHTS,
+    DB_PATH, FEATURES_CSV_PATH, PROJECT_ROOT, SHADOW_BASKET_WEIGHTS,
 )
 from schroeder_trader.execution.broker import get_position, get_account
 from schroeder_trader.execution.reconcile import reconcile_orders
@@ -59,7 +61,25 @@ def run_basket_pipeline(
     # 2. Bootstrap portfolio value.
     portfolio_value = bootstrap_starting_value(store)
 
-    # 3. Load extended features once.
+    # 3. Download external features (idempotent, skips if <24h old), then load.
+    try:
+        logger.info("Downloading external features...")
+        result = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / "backtest" / "download_features.py")],
+            cwd=str(PROJECT_ROOT), capture_output=True, timeout=120,
+        )
+        if result.returncode != 0:
+            stdout_snippet = (result.stdout or b"").decode(errors="replace")[-500:]
+            stderr_snippet = (result.stderr or b"").decode(errors="replace")[-500:]
+            logger.warning(
+                "External feature download failed (rc=%d)\nstderr: %s\nstdout: %s",
+                result.returncode, stderr_snippet, stdout_snippet,
+            )
+    except subprocess.TimeoutExpired:
+        logger.warning("External feature download timed out after 120s, using cached data")
+    except Exception:
+        logger.warning("External feature download failed, using cached data", exc_info=True)
+
     ext_df = pd.DataFrame()
     if FEATURES_CSV_PATH.exists():
         ext_df = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
