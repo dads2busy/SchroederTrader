@@ -1,7 +1,10 @@
 name: daily-basket
 
 on:
-  # No schedule yet — flipped to scheduled in Task 7 once Phase C is verified.
+  schedule:
+    # 21:20 UTC = 16:20 EST = 17:20 EDT. Runs 10 minutes before the
+    # SPY-only pipeline so the unified email can read basket state.
+    - cron: '20 21 * * 1-5'
   workflow_dispatch:
     inputs:
       dry_run:
