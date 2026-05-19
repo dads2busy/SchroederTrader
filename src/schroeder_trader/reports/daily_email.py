@@ -261,13 +261,17 @@ def _compute_ticker_shadow_pnl(
     # Normalize closes index to tz-naive dates so it lines up with the
     # decisions map (which uses ET-local dates).
     closes = closes.copy()
-    if isinstance(closes.index, pd.DatetimeIndex) and closes.index.tz is not None:
-        closes.index = closes.index.tz_localize(None)
+    if isinstance(closes.index, pd.DatetimeIndex):
+        if closes.index.tz is not None:
+            closes.index = closes.index.tz_localize(None)
+        idx_dates = closes.index.date
+    else:
+        # Plain object Index of datetime.date values — already date-typed.
+        idx_dates = closes.index.to_numpy()
+
     inception = df["date"].iloc[0]
     last = df["date"].iloc[-1]
-    closes_window = closes[
-        (closes.index.date >= inception) & (closes.index.date <= last)
-    ]
+    closes_window = closes[(idx_dates >= inception) & (idx_dates <= last)]
     if len(closes_window) < 2:
         return None
 

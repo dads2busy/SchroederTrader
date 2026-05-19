@@ -249,3 +249,28 @@ def test_compute_ticker_shadow_pnl_sell_then_buy_captures_partial_run():
     assert abs(result["composite_return_pct"] - 25.7142857) < 1e-4
     assert abs(result["bnh_return_pct"] - 20.0) < 1e-6
     assert abs(result["edge_pp"] - 5.7142857) < 1e-4
+
+
+def test_compute_ticker_shadow_pnl_handles_date_indexed_closes():
+    # Some upstream callers produce a Series indexed by datetime.date
+    # rather than a DatetimeIndex (CSV round-trips, .set_index on a date column).
+    # The function should accept both.
+    shadow_df = pd.DataFrame({
+        "timestamp": [
+            "2026-05-12T20:30:00+00:00",
+            "2026-05-13T20:30:00+00:00",
+            "2026-05-14T20:30:00+00:00",
+        ],
+        "ticker": ["XLK"] * 3,
+        "close_price": [100.0, 110.0, 105.0],
+        "ml_signal": ["BUY", "HOLD", "SELL"],
+    })
+    closes = pd.Series(
+        [100.0, 110.0, 105.0],
+        index=pd.Index([date(2026, 5, 12), date(2026, 5, 13), date(2026, 5, 14)]),
+        name="close",
+    )
+    result = _compute_ticker_shadow_pnl(shadow_df, closes)
+    assert result is not None
+    assert result["sessions"] == 3
+    assert abs(result["composite_return_pct"] - 5.0) < 1e-6
