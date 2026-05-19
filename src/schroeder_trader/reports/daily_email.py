@@ -476,6 +476,83 @@ def build_performance_section(
     return _section(f"PERFORMANCE — Live trading since {start_date}", lines)
 
 
+def build_basket_paper_section(
+    *,
+    portfolio_df: pd.DataFrame,
+    shadow_signals_df: pd.DataFrame,
+    basket_weights: dict,
+    launch_date: date,
+) -> str:
+    """Render the BASKET PAPER section for the daily email.
+
+    Reads the latest basket-pipeline snapshot from portfolio_df + shadow_signals_df
+    and renders a per-ticker table plus any fired-stop warning notes.
+    Returns empty string if there are no basket rows.
+    """
+    basket_pf = portfolio_df[portfolio_df["pipeline"] == "basket"].copy() if not portfolio_df.empty else portfolio_df
+    if basket_pf.empty:
+        return ""
+
+    # Latest snapshot only
+    latest_ts = basket_pf["timestamp"].max()
+    latest_rows = basket_pf[basket_pf["timestamp"] == latest_ts]
+    total_value = float(latest_rows.iloc[0]["total_value"])
+    cash = float(latest_rows.iloc[0]["cash"])
+    cash_pct = (cash / total_value * 100) if total_value > 0 else 0.0
+
+    # Latest shadow_signals per ticker
+    ss_by_ticker: dict = {}
+    if not shadow_signals_df.empty:
+        ss = shadow_signals_df[shadow_signals_df["pipeline"] == "basket"].copy()
+        if not ss.empty:
+            ss_latest = ss[ss["timestamp"] == ss["timestamp"].max()]
+            for _, r in ss_latest.iterrows():
+                ss_by_ticker[r["ticker"]] = r
+
+    lines = [
+        f"  Total value:  {_fmt_dollars(total_value)}",
+        f"  Cash sleeve:  {_fmt_dollars(cash)} ({cash_pct:.1f}%)",
+        "",
+        f"  {'Ticker':<7} {'Target':>7} {'Actual':>7} {'Position':>9}  "
+        f"{'Value':>10}  {'Signal':<14} {'Stop':>5}",
+        f"  {'-'*7} {'-'*7} {'-'*7} {'-'*9}  {'-'*10}  {'-'*14} {'-'*5}",
+    ]
+    warnings: list[str] = []
+    for ticker in basket_weights:
+        rows_for_ticker = latest_rows[latest_rows["ticker"] == ticker]
+        if rows_for_ticker.empty:
+            continue
+        r = rows_for_ticker.iloc[0]
+        target_pct = basket_weights[ticker] * 100
+        position_value = float(r["position_value"])
+        actual_pct = (position_value / total_value * 100) if total_value > 0 else 0.0
+        position_qty = int(r["position_qty"])
+        ss_row = ss_by_ticker.get(ticker)
+        signal = ss_row["ml_signal"] if ss_row is not None else "—"
+        source = ss_row["signal_source"] if ss_row is not None else "—"
+        stop_fired = bool(int(ss_row["trailing_stop_triggered"])) if (
+            ss_row is not None and pd.notna(ss_row["trailing_stop_triggered"])
+        ) else False
+        stop_label = "FIRED" if stop_fired else "OK"
+        lines.append(
+            f"  {ticker:<7} {target_pct:>6.1f}% {actual_pct:>6.1f}% "
+            f"{position_qty:>5} sh  {_fmt_dollars(position_value):>10}  "
+            f"{signal+' ('+source+')':<14} {stop_label:>5}"
+        )
+        if stop_fired and ss_row is not None and pd.notna(ss_row["high_water_mark"]):
+            warnings.append(
+                f"  ⚠ {ticker} trailing stop fired (HWM {_fmt_dollars(float(ss_row['high_water_mark']), 2)}). "
+                f"Cash held idle; re-entry after cooldown if signal allows."
+            )
+
+    if warnings:
+        lines.append("")
+        lines.extend(warnings)
+
+    header = f"BASKET PAPER (paper-trading the basket since {launch_date})"
+    return _section(header, lines)
+
+
 def build_email_body(
     *,
     date_str: str,
@@ -501,6 +578,7 @@ def build_email_body(
     live_start_date: date,
     sector_close_histories: dict,
     basket_weights: dict | None = None,
+    basket_state: dict | None = None,
 ) -> str:
     """Compose the full email body."""
     sections = [
@@ -534,6 +612,17 @@ def build_email_body(
             start_date=live_start_date,
         ),
     ]
+
+    if basket_state is not None:
+        basket_section = build_basket_paper_section(
+            portfolio_df=basket_state["portfolio_df"],
+            shadow_signals_df=basket_state["shadow_signals_df"],
+            basket_weights=basket_state["basket_weights"],
+            launch_date=basket_state["launch_date"],
+        )
+        if basket_section:
+            sections.append(basket_section)
+
     sector_section = build_sector_shadow_section(
         shadow_signals_path=data_root / "shadow_signals.csv",
         ticker_close_histories=sector_close_histories,

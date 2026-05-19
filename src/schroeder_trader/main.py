@@ -537,6 +537,24 @@ def _run_pipeline_inner(conn) -> None:
         except Exception:
             logger.exception("Could not load previous portfolio value (non-fatal)")
 
+        # Read basket state for the BASKET PAPER section. None if no basket rows yet.
+        basket_state = None
+        try:
+            pf_all = pd.read_csv(Path(DB_PATH).parent / "portfolio.csv")
+            if (pf_all.get("pipeline") == "basket").any():
+                ss_all = pd.read_csv(Path(DB_PATH).parent / "shadow_signals.csv")
+                # Launch date = earliest basket timestamp's date
+                basket_first_ts = pf_all[pf_all["pipeline"] == "basket"]["timestamp"].min()
+                basket_launch_date = pd.to_datetime(basket_first_ts).date()
+                basket_state = {
+                    "portfolio_df": pf_all,
+                    "shadow_signals_df": ss_all,
+                    "basket_weights": SHADOW_BASKET_WEIGHTS,
+                    "launch_date": basket_launch_date,
+                }
+        except Exception:
+            logger.exception("Could not load basket state for email (non-fatal)")
+
         email_body = build_email_body(
             date_str=today,
             spy_close=close_price,
@@ -561,6 +579,7 @@ def _run_pipeline_inner(conn) -> None:
             live_start_date=date(2026, 4, 15),  # first day of paper trading
             sector_close_histories=sector_close_histories,
             basket_weights=SHADOW_BASKET_WEIGHTS,
+            basket_state=basket_state,
         )
         send_daily_summary(
             portfolio_value=account["portfolio_value"],

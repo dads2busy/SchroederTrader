@@ -533,3 +533,116 @@ def test_sector_shadow_section_omits_basket_when_ticker_missing(tmp_path):
     )
     assert "XLK" in section
     assert "BASKET" not in section
+
+
+def test_build_basket_paper_section_renders_all_tickers(tmp_path):
+    from schroeder_trader.reports.daily_email import build_basket_paper_section
+    from datetime import date
+
+    portfolio_df = pd.DataFrame({
+        "timestamp": ["2026-05-21T20:25:00+00:00"] * 4,
+        "pipeline": ["basket"] * 4,
+        "ticker": ["SPY", "XLK", "XLV", "XLE"],
+        "cash": [2140.0] * 4,
+        "position_qty": [64, 181, 111, 175],
+        "position_value": [47747.0, 32491.0, 16212.0, 10150.0],
+        "total_value": [106540.0] * 4,
+    })
+    shadow_signals_df = pd.DataFrame({
+        "timestamp": ["2026-05-21T20:25:00+00:00"] * 4,
+        "pipeline": ["basket"] * 4,
+        "ticker": ["SPY", "XLK", "XLV", "XLE"],
+        "ml_signal": ["HOLD", "HOLD", "HOLD", "BUY"],
+        "signal_source": ["SMA", "XGB", "XGB", "XGB"],
+        "trailing_stop_triggered": [0, 0, 0, 0],
+        "high_water_mark": [47747.0, 32491.0, 16212.0, 10150.0],
+    })
+    weights = {"SPY": 0.45, "XLK": 0.30, "XLV": 0.15, "XLE": 0.10}
+    section = build_basket_paper_section(
+        portfolio_df=portfolio_df,
+        shadow_signals_df=shadow_signals_df,
+        basket_weights=weights,
+        launch_date=date(2026, 5, 21),
+    )
+    assert "BASKET PAPER" in section
+    assert "SPY" in section
+    assert "XLK" in section
+    assert "XLV" in section
+    assert "XLE" in section
+    assert "45.0%" in section  # SPY target weight
+    assert "$106,540" in section or "106,540" in section
+
+
+def test_build_basket_paper_section_shows_fired_stop():
+    from schroeder_trader.reports.daily_email import build_basket_paper_section
+    from datetime import date
+
+    portfolio_df = pd.DataFrame({
+        "timestamp": ["2026-07-14T20:25:00+00:00"],
+        "pipeline": ["basket"],
+        "ticker": ["XLE"],
+        "cash": [10000.0], "position_qty": [0],
+        "position_value": [0.0], "total_value": [100000.0],
+    })
+    shadow_signals_df = pd.DataFrame({
+        "timestamp": ["2026-07-14T20:25:00+00:00"],
+        "pipeline": ["basket"], "ticker": ["XLE"],
+        "ml_signal": ["SELL"], "signal_source": ["FLAT"],
+        "trailing_stop_triggered": [1],
+        "high_water_mark": [61.20],
+    })
+    section = build_basket_paper_section(
+        portfolio_df=portfolio_df, shadow_signals_df=shadow_signals_df,
+        basket_weights={"XLE": 1.0}, launch_date=date(2026, 5, 21),
+    )
+    assert "FIRED" in section
+    assert "trailing stop fired" in section.lower()
+
+
+def test_build_basket_paper_section_returns_empty_when_no_basket_rows():
+    from schroeder_trader.reports.daily_email import build_basket_paper_section
+    from datetime import date
+
+    portfolio_df = pd.DataFrame(columns=[
+        "timestamp", "pipeline", "ticker", "cash",
+        "position_qty", "position_value", "total_value",
+    ])
+    shadow_signals_df = pd.DataFrame(columns=[
+        "timestamp", "pipeline", "ticker", "ml_signal",
+        "signal_source", "trailing_stop_triggered", "high_water_mark",
+    ])
+    section = build_basket_paper_section(
+        portfolio_df=portfolio_df, shadow_signals_df=shadow_signals_df,
+        basket_weights={"SPY": 1.0}, launch_date=date(2026, 5, 21),
+    )
+    assert section == ""
+
+
+def test_build_email_body_omits_basket_section_when_basket_state_is_none(tmp_path):
+    from datetime import date
+    dates = pd.bdate_range("2026-04-15", periods=10).tz_localize(None)
+    spy = pd.DataFrame({"close": [700.0 + i for i in range(10)]}, index=dates)
+    pd.DataFrame(columns=["id", "timestamp", "cash", "position_qty", "position_value", "total_value"]) \
+      .to_csv(tmp_path / "portfolio.csv", index=False)
+    pd.DataFrame(columns=["id", "timestamp", "provider", "target_exposure", "error"]) \
+      .to_csv(tmp_path / "llm_shadow_signals.csv", index=False)
+    pd.DataFrame(columns=["id", "timestamp", "ticker", "close_price", "ml_signal"]) \
+      .to_csv(tmp_path / "shadow_signals.csv", index=False)
+
+    body = build_email_body(
+        date_str="2026-05-14",
+        spy_close=715.16, spy_prev_close=713.97,
+        portfolio_value=101883.0, portfolio_prev_value=100665.0,
+        cash=1965.0, position_qty=141,
+        sma_signal="HOLD", sma_50=676.0, sma_200=667.0,
+        composite_signal="BUY", composite_source="XGB", regime="CHOPPY",
+        bear_days=0, xgb_proba_up=0.578, xgb_threshold=0.35,
+        today_action="HOLD",
+        oracle_responses=[],
+        data_root=tmp_path,
+        spy_history=spy,
+        live_start_date=date(2026, 4, 15),
+        sector_close_histories={},
+        basket_state=None,
+    )
+    assert "BASKET PAPER" not in body
