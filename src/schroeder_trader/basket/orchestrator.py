@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from schroeder_trader.config import (
+    COMPOSITE_MODEL_PATH,
+    SHADOW_TICKERS,
     TRAILING_STOP_PCT,
     TRAILING_STOP_COOLDOWN_DAYS,
     XGB_THRESHOLD_LOW,
@@ -40,7 +43,7 @@ from schroeder_trader.basket.portfolio import (
 
 
 def _compute_signal_for_ticker(
-    ticker: str, model_path, ext_df: pd.DataFrame,
+    ticker: str, model_path: Path, ext_df: pd.DataFrame,
 ):
     """Run the composite-signal pipeline for one ticker.
 
@@ -49,6 +52,10 @@ def _compute_signal_for_ticker(
     _run_shadow_for_ticker in main.py but without the side effects.
     """
     model = load_model(model_path)
+    if model is None:
+        raise RuntimeError(f"Basket {ticker}: no model at {model_path}")
+    if list(model.classes_) != [0, 1, 2]:
+        raise RuntimeError(f"Basket {ticker}: unexpected model classes {list(model.classes_)}")
     df = fetch_daily_bars(ticker, days=600)
     pipeline = FeaturePipeline()
     features = pipeline.compute_features_extended(df, ext_df)
@@ -119,8 +126,6 @@ def compute_decisions(
     Side effect: writes one row per ticker to shadow_signals.csv with
     pipeline='basket' capturing the decision (including HWM and stop state).
     """
-    from schroeder_trader.config import SHADOW_TICKERS, COMPOSITE_MODEL_PATH
-
     decisions: dict[str, dict] = {}
     for ticker in weights:
         # Resolve model path: SPY uses the production model, others use SHADOW_TICKERS
@@ -174,17 +179,26 @@ def compute_decisions(
 
 
 def _load_or_create_stop(store: CsvStore, ticker: str) -> TrailingStop:
-    """Load the per-ticker stop's HWM from the latest basket shadow_signals row.
-    Creates a fresh stop with HWM=0 (caller's update will set it) if none."""
+    """Load the per-ticker stop's HWM and stop_date from the latest basket
+    shadow_signals row. Restores stop_date when the prior row was triggered
+    so the cooldown logic correctly counts days from the trigger."""
     df = store.read("shadow_signals")
-    hwm = 0.0
     if not df.empty:
         rows = df[(df["pipeline"] == "basket") & (df["ticker"] == ticker)]
         if not rows.empty:
             latest = rows.sort_values("timestamp").iloc[-1]
             hwm = float(latest["high_water_mark"]) if pd.notna(latest["high_water_mark"]) else 0.0
+            stop_date = None
+            triggered = latest["trailing_stop_triggered"]
+            if pd.notna(triggered) and int(triggered) == 1:
+                stop_date = pd.Timestamp(latest["timestamp"]).date()
+            return TrailingStop(
+                drawdown_pct=TRAILING_STOP_PCT,
+                cooldown_days=TRAILING_STOP_COOLDOWN_DAYS,
+                high_water_mark=hwm,
+                stop_date=stop_date,
+            )
     return TrailingStop(
         drawdown_pct=TRAILING_STOP_PCT,
         cooldown_days=TRAILING_STOP_COOLDOWN_DAYS,
-        high_water_mark=hwm,
     )

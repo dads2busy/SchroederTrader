@@ -138,6 +138,44 @@ def test_compute_decisions_triggers_trailing_stop_and_forces_flat(
 
 
 @patch("schroeder_trader.basket.orchestrator._compute_signal_for_ticker")
+def test_compute_decisions_respects_cooldown_after_prior_stop(
+    mock_sig, tmp_path,
+):
+    """A stop fired yesterday should keep exposure flat today even if the
+    portfolio value has recovered — the 5-day cooldown forces flat."""
+    # Seed a prior basket row from yesterday where the stop fired.
+    ss = pd.DataFrame({
+        "id": [1], "timestamp": ["2026-05-20T20:30:00+00:00"],
+        "pipeline": ["basket"], "ticker": ["XLK"],
+        "close_price": [100.0],
+        "predicted_class": [None], "predicted_proba": [None],
+        "ml_signal": ["SELL"], "sma_signal": ["SELL"],
+        "regime": ["BEAR"], "signal_source": ["FLAT"],
+        "bear_day_count": [None], "kelly_fraction": [None],
+        "kelly_qty": [None], "high_water_mark": [12000.0],
+        "trailing_stop_triggered": [1],  # KEY: stop fired yesterday
+    })
+    pd.DataFrame(columns=[
+        "id", "timestamp", "pipeline", "ticker",
+        "cash", "position_qty", "position_value", "total_value",
+    ]).to_csv(tmp_path / "portfolio.csv", index=False)
+    ss.to_csv(tmp_path / "shadow_signals.csv", index=False)
+    store = CsvStore(tmp_path)
+
+    # Today's signal would be BUY, portfolio has fully recovered.
+    # But yesterday's stop is still within the 5-day cooldown window.
+    mock_sig.return_value = _fake_signal_pipeline("BUY", "SMA")
+    now = datetime(2026, 5, 21, 20, 30, tzinfo=timezone.utc)
+
+    decisions = compute_decisions(
+        store, {"XLK": 1.0}, pd.DataFrame(), now,
+        portfolio_value=15000.0,  # recovered above HWM
+    )
+    assert decisions["XLK"]["exposure"] == 0.0  # still in cooldown
+    assert decisions["XLK"]["stop_state"]["triggered_today_or_cooldown"] is True
+
+
+@patch("schroeder_trader.basket.orchestrator._compute_signal_for_ticker")
 def test_compute_decisions_logs_shadow_signal_with_pipeline_basket(
     mock_sig, tmp_path,
 ):
