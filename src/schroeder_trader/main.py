@@ -369,6 +369,7 @@ def _run_pipeline_inner(conn) -> None:
                         kelly_qty=k_qty,
                         high_water_mark=trailing_stop.high_water_mark,
                         trailing_stop_triggered=ts_triggered or ts_in_cooldown,
+                        pipeline="spy_only",
                     )
                     logger.info(
                         "Composite: %s (source=%s, regime=%s, bear_days=%d, kelly=%.3f, kelly_qty=%d, hwm=%.0f, ts_stop=%s)",
@@ -443,6 +444,7 @@ def _run_pipeline_inner(conn) -> None:
             result.timestamp, TICKER, order_request.action,
             order_request.quantity, result.status,
             signal_close_price=close_price,
+            pipeline="spy_only",
         )
         send_trade_alert(
             action=order_request.action,
@@ -461,7 +463,7 @@ def _run_pipeline_inner(conn) -> None:
     except Exception:
         logger.exception("Account/position refresh failed; using pre-trade values for snapshot")
     position_value = position_qty * close_price
-    log_portfolio(conn, now, account["cash"], position_qty, position_value, account["portfolio_value"])
+    log_portfolio(conn, now, account["cash"], position_qty, position_value, account["portfolio_value"], pipeline="spy_only")
 
     # Step 11: LLM oracle shadow (Claude + ChatGPT head-to-head, non-fatal)
     oracle_responses = []
@@ -659,6 +661,7 @@ def _run_shadow_for_ticker(
         regime=today_regime.value,
         signal_source=source,
         bear_day_count=bear_days if today_regime == Regime.BEAR else None,
+        pipeline="spy_only",
     )
     logger.info(
         "Shadow %s: %s (source=%s, regime=%s, UP=%.2f, sma=%s)",

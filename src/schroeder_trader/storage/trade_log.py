@@ -52,11 +52,13 @@ def log_order(
     quantity: int,
     status: str,
     signal_close_price: float | None = None,
+    pipeline: str = "spy_only",
 ) -> int:
     return store.append("orders", {
         "signal_id": signal_id,
         "alpaca_order_id": alpaca_order_id,
         "timestamp": timestamp.isoformat(),
+        "pipeline": pipeline,
         "ticker": ticker,
         "action": action,
         "quantity": quantity,
@@ -75,9 +77,13 @@ def log_portfolio(
     position_qty: int,
     position_value: float,
     total_value: float,
+    pipeline: str = "spy_only",
+    ticker: str = "SPY",
 ) -> int:
     return store.append("portfolio", {
         "timestamp": timestamp.isoformat(),
+        "pipeline": pipeline,
+        "ticker": ticker,
         "cash": cash,
         "position_qty": position_qty,
         "position_value": position_value,
@@ -133,12 +139,14 @@ def insert_reconciled_order(
     status: str,
     fill_price: float | None = None,
     fill_timestamp: datetime | None = None,
+    pipeline: str = "spy_only",
 ) -> int:
     # signal_id=0 marks reconciled-orphan, same convention as the SQLite version
     return store.append("orders", {
         "signal_id": 0,
         "alpaca_order_id": alpaca_order_id,
         "timestamp": timestamp.isoformat(),
+        "pipeline": pipeline,
         "ticker": ticker,
         "action": action,
         "quantity": quantity,
@@ -196,10 +204,12 @@ def log_shadow_signal(
     kelly_qty: int | None = None,
     high_water_mark: float | None = None,
     trailing_stop_triggered: bool | None = None,
+    pipeline: str = "spy_only",
 ) -> int:
     ts_int = int(trailing_stop_triggered) if trailing_stop_triggered is not None else None
     return store.append("shadow_signals", {
         "timestamp": timestamp.isoformat(),
+        "pipeline": pipeline,
         "ticker": ticker,
         "close_price": close_price,
         "predicted_class": predicted_class,

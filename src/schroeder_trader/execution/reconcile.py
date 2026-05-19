@@ -59,6 +59,7 @@ def reconcile_orders(conn, ticker: str, lookback_days: int = 7) -> list[str]:
             status=db_status,
             fill_price=fill_price,
             fill_timestamp=fill_ts,
+            pipeline="spy_only",
         )
         logger.warning(
             "Reconciled orphaned Alpaca order %s (%s %s %d, status=%s)",
