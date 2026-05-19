@@ -109,6 +109,11 @@ def test_build_email_body_full(tmp_path):
         "id", "timestamp", "provider", "target_exposure", "error"
     ]).to_csv(tmp_path / "llm_shadow_signals.csv", index=False)
 
+    # Empty shadow_signals.csv (no sector shadow section)
+    pd.DataFrame(columns=[
+        "id", "timestamp", "ticker", "close_price", "ml_signal",
+    ]).to_csv(tmp_path / "shadow_signals.csv", index=False)
+
     body = build_email_body(
         date_str="2026-04-28",
         spy_close=715.16,
@@ -131,15 +136,57 @@ def test_build_email_body_full(tmp_path):
         data_root=tmp_path,
         spy_history=spy,
         live_start_date=date(2026, 4, 15),
+        sector_close_histories={},
     )
-    # Top-level structure
     assert "SchroederTrader Daily Report — 2026-04-28" in body
     assert "TODAY" in body
     assert "SYSTEM" in body
     assert "LLM ORACLES" in body
     assert "PERFORMANCE" in body
-    # Real P&L row should reflect our synthetic portfolio
+    # No sector shadow section when csv is empty
+    assert "SECTOR SHADOW" not in body
     assert "System (real)" in body
+
+
+def test_build_email_body_includes_sector_shadow(tmp_path):
+    dates = pd.bdate_range("2026-04-15", periods=10).tz_localize(None)
+    spy = pd.DataFrame({"close": [700.0 + i for i in range(10)]}, index=dates)
+    pd.DataFrame(columns=["id", "timestamp", "cash", "position_qty", "position_value", "total_value"]) \
+      .to_csv(tmp_path / "portfolio.csv", index=False)
+    pd.DataFrame(columns=["id", "timestamp", "provider", "target_exposure", "error"]) \
+      .to_csv(tmp_path / "llm_shadow_signals.csv", index=False)
+    pd.DataFrame({
+        "timestamp": [
+            "2026-05-12T20:30:00+00:00", "2026-05-13T20:30:00+00:00", "2026-05-14T20:30:00+00:00",
+        ],
+        "ticker": ["XLK"] * 3,
+        "close_price": [100.0, 110.0, 121.0],
+        "ml_signal": ["BUY", "HOLD", "HOLD"],
+    }).to_csv(tmp_path / "shadow_signals.csv", index=False)
+
+    xlk_closes = pd.Series(
+        [100.0, 110.0, 121.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]),
+    )
+
+    body = build_email_body(
+        date_str="2026-05-14",
+        spy_close=715.16, spy_prev_close=713.97,
+        portfolio_value=101883.0, portfolio_prev_value=100665.0,
+        cash=1965.0, position_qty=141,
+        sma_signal="HOLD", sma_50=676.0, sma_200=667.0,
+        composite_signal="BUY", composite_source="XGB", regime="CHOPPY",
+        bear_days=0, xgb_proba_up=0.578, xgb_threshold=0.35,
+        today_action="HOLD",
+        oracle_responses=[],
+        data_root=tmp_path,
+        spy_history=spy,
+        live_start_date=date(2026, 4, 15),
+        sector_close_histories={"XLK": xlk_closes},
+    )
+    assert "SECTOR SHADOW" in body
+    assert "XLK" in body
+    assert "+21.00%" in body
 
 
 def test_exposure_from_decisions_buy_hold_sell_carry_forward():

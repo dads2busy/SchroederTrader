@@ -401,6 +401,7 @@ def build_email_body(
     data_root: Path,
     spy_history: pd.DataFrame,
     live_start_date: date,
+    sector_close_histories: dict,
 ) -> str:
     """Compose the full email body."""
     sections = [
@@ -434,4 +435,10 @@ def build_email_body(
             start_date=live_start_date,
         ),
     ]
+    sector_section = build_sector_shadow_section(
+        shadow_signals_path=data_root / "shadow_signals.csv",
+        ticker_close_histories=sector_close_histories,
+    )
+    if sector_section:
+        sections.append(sector_section)
     return "\n\n".join(sections) + "\n"

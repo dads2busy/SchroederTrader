@@ -547,6 +547,7 @@ def _run_pipeline_inner(conn) -> None:
             data_root=Path(DB_PATH).parent,
             spy_history=df,
             live_start_date=date(2026, 4, 15),  # first day of paper trading
+            sector_close_histories={},  # TODO(Task 5): populate with real ticker histories
         )
         send_daily_summary(
             portfolio_value=account["portfolio_value"],
