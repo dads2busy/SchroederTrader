@@ -14,9 +14,8 @@ This is the only scenario where exact equivalence holds by design:
   is both meaningful and verifiable on these days.
 
 The SimulatedBroker (production class) is cold-started from the fixture's
-spy_only total_value, matching broker_state.json's initial cash. On FLAT
-days no orders are submitted, so positions stay at zero and total_value
-equals cash.
+spy_only total_value. On FLAT days no orders are submitted, so positions
+stay at zero and total_value equals cash.
 
 Fixture dates chosen:
 - 2026-03-31: BEAR/FLAT, qty=0, close=650.34 (mid-bear-run)
