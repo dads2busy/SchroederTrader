@@ -652,6 +652,8 @@ def _run_shadow_for_ticker(
         today_regime, sma_signal, xgb_low, bear_weakening=bear_weakening,
     )
 
+    # pipeline="spy_only" because this loop runs INSIDE the SPY-only pipeline.
+    # The basket pipeline will independently write its own pipeline="basket" rows.
     log_shadow_signal(
         conn, now, ticker, close_price,
         predicted_class=pred_class,

@@ -1,7 +1,5 @@
-import shutil
 from pathlib import Path
 import pandas as pd
-import pytest
 
 from scripts.migrate_portfolio_to_pipeline_column import migrate
 
