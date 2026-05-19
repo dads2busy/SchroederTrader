@@ -1,0 +1,7 @@
+{
+  "expected_position_qty": 0,
+  "expected_total_value": 100000.0,
+  "ml_signal": "SELL",
+  "sma_signal": "HOLD",
+  "regime": "BEAR"
+}
