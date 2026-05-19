@@ -10,6 +10,7 @@ from schroeder_trader.reports.daily_email import (
     build_system_section,
     build_oracles_section,
     build_email_body,
+    build_sector_shadow_section,
     _exposure_from_decisions,
     _compute_ticker_shadow_pnl,
 )
@@ -249,6 +250,72 @@ def test_compute_ticker_shadow_pnl_sell_then_buy_captures_partial_run():
     assert abs(result["composite_return_pct"] - 25.7142857) < 1e-4
     assert abs(result["bnh_return_pct"] - 20.0) < 1e-6
     assert abs(result["edge_pp"] - 5.7142857) < 1e-4
+
+
+def test_sector_shadow_section_two_tickers(tmp_path):
+    # XLK: 3 sessions, composite=BUY all → matches B&H
+    # XLE: 3 sessions, BUY then SELL then BUY → sits out the middle day
+    shadow = pd.DataFrame({
+        "timestamp": [
+            "2026-05-12T20:30:00+00:00", "2026-05-13T20:30:00+00:00", "2026-05-14T20:30:00+00:00",
+            "2026-05-12T20:30:00+00:00", "2026-05-13T20:30:00+00:00", "2026-05-14T20:30:00+00:00",
+            "2026-05-12T20:30:00+00:00", "2026-05-13T20:30:00+00:00", "2026-05-14T20:30:00+00:00",
+        ],
+        "ticker": ["XLK", "XLK", "XLK", "XLE", "XLE", "XLE", "SPY", "SPY", "SPY"],
+        "close_price": [
+            100.0, 110.0, 121.0,
+             50.0,  55.0,  52.0,
+            700.0, 710.0, 720.0,
+        ],
+        "ml_signal": ["BUY"] * 3 + ["BUY", "SELL", "BUY"] + ["HOLD"] * 3,
+    })
+    shadow.to_csv(tmp_path / "shadow_signals.csv", index=False)
+
+    xlk_closes = pd.Series(
+        [100.0, 110.0, 121.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]),
+    )
+    xle_closes = pd.Series(
+        [50.0, 55.0, 52.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]),
+    )
+
+    section = build_sector_shadow_section(
+        shadow_signals_path=tmp_path / "shadow_signals.csv",
+        ticker_close_histories={"XLK": xlk_closes, "XLE": xle_closes},
+    )
+    assert "SECTOR SHADOW" in section
+    assert "XLK" in section
+    assert "XLE" in section
+    assert "SPY" not in section  # SPY excluded
+    # XLK composite return = B&H = +21.00%
+    assert "+21.00%" in section
+    # XLE composite: exposures = [1.0, 1.0, 0.0] → value sequence 100, 110, 110 → +10.00%
+    assert "+10.00%" in section
+
+
+def test_sector_shadow_section_empty_when_only_spy(tmp_path):
+    shadow = pd.DataFrame({
+        "timestamp": ["2026-05-12T20:30:00+00:00"],
+        "ticker": ["SPY"],
+        "close_price": [700.0],
+        "ml_signal": ["HOLD"],
+    })
+    shadow.to_csv(tmp_path / "shadow_signals.csv", index=False)
+
+    section = build_sector_shadow_section(
+        shadow_signals_path=tmp_path / "shadow_signals.csv",
+        ticker_close_histories={},
+    )
+    assert section == ""
+
+
+def test_sector_shadow_section_missing_file_returns_empty(tmp_path):
+    section = build_sector_shadow_section(
+        shadow_signals_path=tmp_path / "does-not-exist.csv",
+        ticker_close_histories={},
+    )
+    assert section == ""
 
 
 def test_compute_ticker_shadow_pnl_handles_date_indexed_closes():

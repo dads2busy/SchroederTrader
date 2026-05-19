@@ -290,6 +290,53 @@ def _compute_ticker_shadow_pnl(
     }
 
 
+def build_sector_shadow_section(
+    *,
+    shadow_signals_path: Path,
+    ticker_close_histories: dict,
+) -> str:
+    """Build the SECTOR SHADOW table from shadow_signals.csv.
+
+    Excludes SPY (already shown elsewhere). Tickers with fewer than two
+    sessions or with no matching close history are skipped. Returns an
+    empty string if no rows qualify — caller should omit the section.
+    """
+    if not shadow_signals_path.exists():
+        return ""
+    shadow = pd.read_csv(shadow_signals_path)
+    if shadow.empty:
+        return ""
+
+    rows: list[tuple[str, dict]] = []
+    for ticker in sorted(t for t in shadow["ticker"].unique() if t != "SPY"):
+        closes = ticker_close_histories.get(ticker)
+        if closes is None or len(closes) == 0:
+            continue
+        ticker_df = shadow[shadow["ticker"] == ticker]
+        result = _compute_ticker_shadow_pnl(ticker_df, closes)
+        if result is not None:
+            rows.append((ticker, result))
+
+    if not rows:
+        return ""
+
+    lines = [
+        f"  {'Ticker':<7} {'Since':<11} {'Sessions':>8}  {'Composite':>9}  {'B&H':>9}  {'Edge':>9}",
+        f"  {'-'*7} {'-'*11} {'-'*8}  {'-'*9}  {'-'*9}  {'-'*9}",
+    ]
+    for ticker, r in rows:
+        comp = _fmt_pct(r["composite_return_pct"])
+        bnh = _fmt_pct(r["bnh_return_pct"])
+        edge = f"{r['edge_pp']:+.2f} pp"
+        lines.append(
+            f"  {ticker:<7} {str(r['inception']):<11} {r['sessions']:>8}  {comp:>9}  {bnh:>9}  {edge:>9}"
+        )
+    lines.append("")
+    lines.append("  Note: composite signal logged but not traded; numbers reflect")
+    lines.append("        what binary exposure would have earned vs buy-and-hold.")
+    return _section("SECTOR SHADOW (composite signal, not trading)", lines)
+
+
 def build_performance_section(
     *,
     data_root: Path,
