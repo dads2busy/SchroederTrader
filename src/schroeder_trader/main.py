@@ -499,7 +499,7 @@ def _run_pipeline_inner(conn) -> None:
     # ticker (XLK etc.) and log to shadow_signals.csv. Validated by backtest;
     # not yet wired into trading or the email. Wrapped per-ticker so a single
     # ticker failure doesn't stop the others.
-    sector_close_histories: dict[str, pd.DataFrame] = {}
+    sector_close_histories: dict[str, pd.Series] = {}
     if FEATURES_CSV_PATH.exists():
         try:
             ext_df_shadow = pd.read_csv(str(FEATURES_CSV_PATH), index_col="date", parse_dates=True)
