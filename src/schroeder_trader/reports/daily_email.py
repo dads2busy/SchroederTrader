@@ -204,6 +204,25 @@ def _simulate_close_to_close(closes: pd.Series, targets_by_date: dict, start_val
     return pd.Series(values, index=closes.index, name="value")
 
 
+def _exposure_from_decisions(decisions_by_date: dict) -> dict:
+    """Translate BUY/HOLD/SELL sequence into a 0/1 exposure map.
+
+    HOLD carries the previous exposure forward. A leading HOLD (no prior BUY)
+    starts at 0.0 — matches "you can't hold what you don't have."
+    """
+    out: dict = {}
+    current = 0.0
+    for d in sorted(decisions_by_date):
+        decision = decisions_by_date[d]
+        if decision == "BUY":
+            current = 1.0
+        elif decision == "SELL":
+            current = 0.0
+        # HOLD: leave `current` unchanged
+        out[d] = current
+    return out
+
+
 def build_performance_section(
     *,
     data_root: Path,

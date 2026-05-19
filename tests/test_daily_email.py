@@ -4,11 +4,14 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 
+from datetime import date as _date
+
 from schroeder_trader.reports.daily_email import (
     build_today_section,
     build_system_section,
     build_oracles_section,
     build_email_body,
+    _exposure_from_decisions,
 )
 
 
@@ -136,3 +139,29 @@ def test_build_email_body_full(tmp_path):
     assert "PERFORMANCE" in body
     # Real P&L row should reflect our synthetic portfolio
     assert "System (real)" in body
+
+
+def test_exposure_from_decisions_buy_hold_sell_carry_forward():
+    decisions = {
+        _date(2026, 5, 12): "BUY",
+        _date(2026, 5, 13): "HOLD",
+        _date(2026, 5, 14): "HOLD",
+        _date(2026, 5, 15): "SELL",
+        _date(2026, 5, 18): "HOLD",
+    }
+    exposure = _exposure_from_decisions(decisions)
+    assert exposure[_date(2026, 5, 12)] == 1.0
+    assert exposure[_date(2026, 5, 13)] == 1.0  # HOLD carries BUY forward
+    assert exposure[_date(2026, 5, 14)] == 1.0
+    assert exposure[_date(2026, 5, 15)] == 0.0  # SELL flattens
+    assert exposure[_date(2026, 5, 18)] == 0.0  # HOLD carries SELL forward
+
+
+def test_exposure_from_decisions_starts_flat_if_first_is_hold():
+    decisions = {
+        _date(2026, 5, 12): "HOLD",
+        _date(2026, 5, 13): "BUY",
+    }
+    exposure = _exposure_from_decisions(decisions)
+    assert exposure[_date(2026, 5, 12)] == 0.0  # nothing to carry forward
+    assert exposure[_date(2026, 5, 13)] == 1.0
