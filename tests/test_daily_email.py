@@ -318,6 +318,32 @@ def test_sector_shadow_section_missing_file_returns_empty(tmp_path):
     assert section == ""
 
 
+def test_sector_shadow_section_ignores_nan_ticker(tmp_path):
+    # A blank ticker cell shouldn't crash sorted() — drop NaN before unique.
+    shadow = pd.DataFrame({
+        "timestamp": [
+            "2026-05-12T20:30:00+00:00", "2026-05-13T20:30:00+00:00",
+            "2026-05-12T20:30:00+00:00",
+        ],
+        "ticker": ["XLK", "XLK", None],
+        "close_price": [100.0, 110.0, 50.0],
+        "ml_signal": ["BUY", "HOLD", "BUY"],
+    })
+    shadow.to_csv(tmp_path / "shadow_signals.csv", index=False)
+
+    xlk_closes = pd.Series(
+        [100.0, 110.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13"]),
+    )
+
+    section = build_sector_shadow_section(
+        shadow_signals_path=tmp_path / "shadow_signals.csv",
+        ticker_close_histories={"XLK": xlk_closes},
+    )
+    assert "XLK" in section
+    assert "+10.00%" in section  # XLK B&H over 100 → 110
+
+
 def test_compute_ticker_shadow_pnl_handles_date_indexed_closes():
     # Some upstream callers produce a Series indexed by datetime.date
     # rather than a DatetimeIndex (CSV round-trips, .set_index on a date column).

@@ -308,7 +308,7 @@ def build_sector_shadow_section(
         return ""
 
     rows: list[tuple[str, dict]] = []
-    for ticker in sorted(t for t in shadow["ticker"].unique() if t != "SPY"):
+    for ticker in sorted(t for t in shadow["ticker"].dropna().unique() if t != "SPY"):
         closes = ticker_close_histories.get(ticker)
         if closes is None or len(closes) == 0:
             continue
