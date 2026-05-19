@@ -290,21 +290,9 @@ def _compute_ticker_shadow_pnl(
         "composite_return_pct": composite_pct,
         "bnh_return_pct": bnh_pct,
         "edge_pp": composite_pct - bnh_pct,
-        "annualized_pct": _annualize(composite_pct, len(df)),
         "composite_value_series": values,
         "bnh_value_series": bnh_values,
     }
-
-
-def _annualize(cumulative_pct: float, sessions: int, periods_per_year: int = 252) -> float:
-    """Convert a cumulative return % over N trading sessions into an annualized %.
-
-    Uses geometric scaling: (1+r)^(periods_per_year/sessions) - 1. Returns 0.0
-    when sessions is non-positive to keep the call site simple.
-    """
-    if sessions <= 0:
-        return 0.0
-    return ((1.0 + cumulative_pct / 100.0) ** (periods_per_year / sessions) - 1.0) * 100.0
 
 
 def _compute_basket_pnl(
@@ -353,18 +341,7 @@ def _compute_basket_pnl(
         "composite_return_pct": composite_pct,
         "bnh_return_pct": bnh_pct,
         "edge_pp": composite_pct - bnh_pct,
-        "annualized_pct": _annualize(composite_pct, sessions),
     }
-
-
-_ANNUALIZED_MIN_SESSIONS = 20
-
-
-def _fmt_ann(annualized_pct: float | None, sessions: int) -> str:
-    """Format annualized %, blanking out windows too short to be meaningful."""
-    if annualized_pct is None or sessions < _ANNUALIZED_MIN_SESSIONS:
-        return "—"
-    return _fmt_pct(annualized_pct)
 
 
 def _fmt_edge(edge_pp: float | None) -> str:
@@ -420,18 +397,17 @@ def build_sector_shadow_section(
 
     header = (
         f"  {'Ticker':<7} {'Since':<11} {'Sessions':>8}  "
-        f"{'Composite':>9}  {'Ann.':>9}  {'B&H':>9}  {'Edge':>9}"
+        f"{'Composite':>9}  {'B&H':>9}  {'Edge':>9}"
     )
     sep = (
         f"  {'-'*7} {'-'*11} {'-'*8}  "
-        f"{'-'*9}  {'-'*9}  {'-'*9}  {'-'*9}"
+        f"{'-'*9}  {'-'*9}  {'-'*9}"
     )
     lines = [header, sep]
     for ticker, r in rows:
         lines.append(
             f"  {ticker:<7} {str(r['inception']):<11} {r['sessions']:>8}  "
             f"{_fmt_pct(r['composite_return_pct']):>9}  "
-            f"{_fmt_ann(r['annualized_pct'], r['sessions']):>9}  "
             f"{_fmt_pct(r['bnh_return_pct']):>9}  "
             f"{_fmt_edge(r['edge_pp']):>9}"
         )
@@ -440,14 +416,12 @@ def build_sector_shadow_section(
         weight_label = "/".join(
             f"{int(round(basket_weights[t]*100))}" for t in basket_weights
         )
-        ticker_label = "BASKET"
         # Insert a separator before the basket so it visually stands out.
         lines.append(sep)
         lines.append(
-            f"  {ticker_label:<7} {str(basket_row['inception']):<11} "
+            f"  {'BASKET':<7} {str(basket_row['inception']):<11} "
             f"{basket_row['sessions']:>8}  "
             f"{_fmt_pct(basket_row['composite_return_pct']):>9}  "
-            f"{_fmt_ann(basket_row['annualized_pct'], basket_row['sessions']):>9}  "
             f"{_fmt_pct(basket_row['bnh_return_pct']):>9}  "
             f"{_fmt_edge(basket_row['edge_pp']):>9}"
         )
@@ -458,9 +432,6 @@ def build_sector_shadow_section(
     lines.append("")
     lines.append("  Note: composite signal logged but not traded; numbers reflect")
     lines.append("        what binary exposure would have earned vs buy-and-hold.")
-    lines.append(
-        f"        Annualized shown once a ticker has {_ANNUALIZED_MIN_SESSIONS}+ sessions of history."
-    )
     return _section("SECTOR SHADOW (composite signal, not trading)", lines)
 
 

@@ -14,7 +14,6 @@ from schroeder_trader.reports.daily_email import (
     _exposure_from_decisions,
     _compute_ticker_shadow_pnl,
     _compute_basket_pnl,
-    _annualize,
 )
 
 
@@ -418,16 +417,7 @@ def test_compute_ticker_shadow_pnl_handles_date_indexed_closes():
     assert abs(result["composite_return_pct"] - 5.0) < 1e-6
 
 
-def test_annualize_basic():
-    # +10% over 252 sessions → annualized +10%
-    assert abs(_annualize(10.0, 252) - 10.0) < 1e-9
-    # +21% over 504 sessions → (1.21)^(252/504) - 1 = 10%
-    assert abs(_annualize(21.0, 504) - 10.0) < 1e-6
-    # zero sessions guard
-    assert _annualize(50.0, 0) == 0.0
-
-
-def test_compute_ticker_shadow_pnl_now_returns_annualized_and_value_series():
+def test_compute_ticker_shadow_pnl_returns_value_series_for_basket_math():
     shadow_df = pd.DataFrame({
         "timestamp": [
             "2026-05-12T20:30:00+00:00",
@@ -443,14 +433,8 @@ def test_compute_ticker_shadow_pnl_now_returns_annualized_and_value_series():
         index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]),
     )
     result = _compute_ticker_shadow_pnl(shadow_df, closes)
-    assert "annualized_pct" in result
     assert "composite_value_series" in result
     assert "bnh_value_series" in result
-    # +21% over 3 sessions → (1.21)^(252/3) - 1 = a huge number; we just verify
-    # it's computed (not None) and matches the formula.
-    expected = ((1.21 ** (252 / 3)) - 1) * 100
-    assert abs(result["annualized_pct"] - expected) < 1.0  # huge value, loose tol
-    # value series starts at 100 and ends at 121
     vs = result["composite_value_series"]
     assert abs(float(vs.iloc[0]) - 100.0) < 1e-6
     assert abs(float(vs.iloc[-1]) - 121.0) < 1e-6
@@ -520,13 +504,9 @@ def test_sector_shadow_section_renders_basket_row(tmp_path):
         basket_weights={"SPY": 0.5, "XLK": 0.5},
     )
     assert "BASKET" in section
-    assert "Ann." in section  # new annualized column header
-    # SPY per-row should NOT appear in the table body (excluded from per-row display)
     assert "SECTOR SHADOW" in section
-    # XLK row should appear
+    # XLK row should appear; SPY's per-row should not (excluded from per-row display)
     assert "XLK" in section
-    # Annualized for 3-session window should be "—" (below threshold)
-    assert "—" in section
 
 
 def test_sector_shadow_section_omits_basket_when_ticker_missing(tmp_path):
