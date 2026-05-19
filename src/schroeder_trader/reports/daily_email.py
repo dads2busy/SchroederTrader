@@ -327,7 +327,10 @@ def build_sector_shadow_section(
     for ticker, r in rows:
         comp = _fmt_pct(r["composite_return_pct"])
         bnh = _fmt_pct(r["bnh_return_pct"])
-        edge = f"{r['edge_pp']:+.2f} pp"
+        # Snap sub-cent edges to 0 so float accumulation noise doesn't render
+        # as "-0.00 pp" when composite and B&H are numerically identical.
+        edge_val = r["edge_pp"] if abs(r["edge_pp"]) >= 0.005 else 0.0
+        edge = f"{edge_val:+.2f} pp"
         lines.append(
             f"  {ticker:<7} {str(r['inception']):<11} {r['sessions']:>8}  {comp:>9}  {bnh:>9}  {edge:>9}"
         )
