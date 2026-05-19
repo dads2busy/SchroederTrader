@@ -1,0 +1,1 @@
+id,signal_id,pipeline,alpaca_order_id,timestamp,ticker,action,quantity,fill_price,fill_timestamp,status,signal_close_price,slippage
