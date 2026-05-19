@@ -11,6 +11,7 @@ from schroeder_trader.reports.daily_email import (
     build_oracles_section,
     build_email_body,
     _exposure_from_decisions,
+    _compute_ticker_shadow_pnl,
 )
 
 
@@ -174,3 +175,77 @@ def test_exposure_from_decisions_rejects_unknown_decision():
     import pytest as _pytest
     with _pytest.raises(ValueError, match="Unknown decision"):
         _exposure_from_decisions({date(2026, 5, 12): "SELL "})  # trailing space
+
+
+def test_compute_ticker_shadow_pnl_basic():
+    # Three days for XLK: BUY at 100, HOLD at 110, SELL at 105
+    # Expected: exposure 1.0 from day 1 onward.
+    #   day 1 → day 2: 1.0 * (110/100 - 1) = +10%
+    #   day 2 → day 3: 1.0 * (105/110 - 1) = -4.55%
+    #   composite final = 100 * 1.10 * (105/110) = 105.0  →  +5.00%
+    # B&H: (105/100 - 1) = +5.00%  →  edge 0.00pp (signals never sold in time)
+    shadow_df = pd.DataFrame({
+        "timestamp": [
+            "2026-05-12T20:30:00+00:00",
+            "2026-05-13T20:30:00+00:00",
+            "2026-05-14T20:30:00+00:00",
+        ],
+        "ticker": ["XLK", "XLK", "XLK"],
+        "close_price": [100.0, 110.0, 105.0],
+        "ml_signal": ["BUY", "HOLD", "SELL"],
+    })
+    closes = pd.Series(
+        [100.0, 110.0, 105.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14"]),
+        name="close",
+    )
+    result = _compute_ticker_shadow_pnl(shadow_df, closes)
+    assert result is not None
+    assert result["sessions"] == 3
+    assert result["inception"] == date(2026, 5, 12)
+    assert abs(result["composite_return_pct"] - 5.0) < 1e-6
+    assert abs(result["bnh_return_pct"] - 5.0) < 1e-6
+    assert abs(result["edge_pp"] - 0.0) < 1e-6
+
+
+def test_compute_ticker_shadow_pnl_skips_single_session():
+    shadow_df = pd.DataFrame({
+        "timestamp": ["2026-05-12T20:30:00+00:00"],
+        "ticker": ["XLK"],
+        "close_price": [100.0],
+        "ml_signal": ["BUY"],
+    })
+    closes = pd.Series(
+        [100.0], index=pd.to_datetime(["2026-05-12"]), name="close",
+    )
+    assert _compute_ticker_shadow_pnl(shadow_df, closes) is None
+
+
+def test_compute_ticker_shadow_pnl_sell_then_buy_captures_partial_run():
+    # Day 1 BUY @100, Day 2 SELL @110 (signal applied next day), Day 3 BUY @105, Day 4 HOLD @120
+    # Composite exposures: d1→d2 = 1.0, d2→d3 = 0.0, d3→d4 = 1.0
+    #   d1→d2: 1.0 * (110/100 - 1) = +10%   → 110.0
+    #   d2→d3: 0.0 * (105/110 - 1) = 0       → 110.0
+    #   d3→d4: 1.0 * (120/105 - 1) = +14.29% → 125.71
+    # Composite return = +25.71%; B&H = +20.00%; edge ≈ +5.71pp
+    shadow_df = pd.DataFrame({
+        "timestamp": [
+            "2026-05-12T20:30:00+00:00",
+            "2026-05-13T20:30:00+00:00",
+            "2026-05-14T20:30:00+00:00",
+            "2026-05-15T20:30:00+00:00",
+        ],
+        "ticker": ["XLK"] * 4,
+        "close_price": [100.0, 110.0, 105.0, 120.0],
+        "ml_signal": ["BUY", "SELL", "BUY", "HOLD"],
+    })
+    closes = pd.Series(
+        [100.0, 110.0, 105.0, 120.0],
+        index=pd.to_datetime(["2026-05-12", "2026-05-13", "2026-05-14", "2026-05-15"]),
+        name="close",
+    )
+    result = _compute_ticker_shadow_pnl(shadow_df, closes)
+    assert result["sessions"] == 4
+    assert abs(result["composite_return_pct"] - 25.7142857) < 1e-4
+    assert abs(result["bnh_return_pct"] - 20.0) < 1e-6
+    assert abs(result["edge_pp"] - 5.7142857) < 1e-4

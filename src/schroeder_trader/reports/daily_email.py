@@ -229,6 +229,63 @@ def _exposure_from_decisions(decisions_by_date: dict) -> dict:
     return out
 
 
+def _compute_ticker_shadow_pnl(
+    shadow_df: pd.DataFrame, closes: pd.Series,
+) -> dict | None:
+    """Compute composite vs B&H return for a single ticker.
+
+    shadow_df: rows from shadow_signals.csv already filtered to one ticker.
+               The 'ml_signal' column stores the composite decision
+               (BUY/HOLD/SELL), not the raw XGB signal — see
+               src/schroeder_trader/main.py:358 and :635 where
+               composite_sig.value is written into that column.
+    closes:    daily close prices for the ticker, indexed by date or datetime,
+               covering at least the shadow window.
+
+    Returns None if there are fewer than 2 distinct shadow sessions.
+    """
+    if shadow_df.empty:
+        return None
+
+    df = shadow_df.copy()
+    df["date"] = pd.to_datetime(df["timestamp"], utc=True, format="ISO8601") \
+        .dt.tz_convert("America/New_York").dt.date
+    # Same-date dedupe (latest entry wins; matches oracle sim convention).
+    df = df.drop_duplicates(["date"], keep="last").sort_values("date")
+    if len(df) < 2:
+        return None
+
+    decisions_by_date = dict(zip(df["date"], df["ml_signal"].astype(str)))
+    exposure_by_date = _exposure_from_decisions(decisions_by_date)
+
+    # Normalize closes index to tz-naive dates so it lines up with the
+    # decisions map (which uses ET-local dates).
+    closes = closes.copy()
+    if isinstance(closes.index, pd.DatetimeIndex) and closes.index.tz is not None:
+        closes.index = closes.index.tz_localize(None)
+    inception = df["date"].iloc[0]
+    last = df["date"].iloc[-1]
+    closes_window = closes[
+        (closes.index.date >= inception) & (closes.index.date <= last)
+    ]
+    if len(closes_window) < 2:
+        return None
+
+    values = _simulate_close_to_close(
+        closes_window, exposure_by_date, start_value=100.0,
+    )
+    composite_pct = (float(values.iloc[-1]) / 100.0 - 1) * 100
+    bnh_pct = (float(closes_window.iloc[-1]) / float(closes_window.iloc[0]) - 1) * 100
+
+    return {
+        "inception": inception,
+        "sessions": len(df),
+        "composite_return_pct": composite_pct,
+        "bnh_return_pct": bnh_pct,
+        "edge_pp": composite_pct - bnh_pct,
+    }
+
+
 def build_performance_section(
     *,
     data_root: Path,
