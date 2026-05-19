@@ -57,8 +57,24 @@ def test_compute_decisions_buy_signal_produces_full_exposure(
 def test_compute_decisions_sell_signal_produces_flat_exposure(
     mock_sig, tmp_path,
 ):
+    # Seed a prior basket row so this is a warm start (not cold start).
+    # Cold start overrides SELL to 1.0; warm start respects the SELL signal.
+    pd.DataFrame({
+        "id": [1], "timestamp": ["2026-05-20T20:30:00+00:00"],
+        "pipeline": ["basket"], "ticker": ["SPY"],
+        "cash": [100000.0], "position_qty": [0],
+        "position_value": [0.0], "total_value": [100000.0],
+    }).to_csv(tmp_path / "portfolio.csv", index=False)
+    pd.DataFrame(columns=[
+        "id", "timestamp", "pipeline", "ticker", "close_price",
+        "predicted_class", "predicted_proba", "ml_signal", "sma_signal",
+        "regime", "signal_source", "bear_day_count",
+        "kelly_fraction", "kelly_qty", "high_water_mark",
+        "trailing_stop_triggered",
+    ]).to_csv(tmp_path / "shadow_signals.csv", index=False)
+    store = CsvStore(tmp_path)
+
     mock_sig.return_value = _fake_signal_pipeline("SELL", "FLAT", regime="BEAR")
-    store = _make_store(tmp_path)
     weights = {"SPY": 1.0}
     now = datetime(2026, 5, 21, 20, 30, tzinfo=timezone.utc)
 
@@ -190,3 +206,64 @@ def test_compute_decisions_logs_shadow_signal_with_pipeline_basket(
     assert ss.iloc[0]["pipeline"] == "basket"
     assert ss.iloc[0]["ticker"] == "SPY"
     assert ss.iloc[0]["ml_signal"] == "BUY"
+
+
+@patch("schroeder_trader.basket.orchestrator._compute_signal_for_ticker")
+def test_compute_decisions_cold_start_force_invests_hold_signal(
+    mock_sig, tmp_path,
+):
+    """On cold start (no prior basket rows), HOLD signal still gets exposure=1.0."""
+    mock_sig.return_value = _fake_signal_pipeline("HOLD", "SMA")
+    store = _make_store(tmp_path)
+    weights = {"SPY": 1.0}
+    now = datetime(2026, 5, 21, 20, 30, tzinfo=timezone.utc)
+
+    decisions = compute_decisions(store, weights, pd.DataFrame(), now, portfolio_value=100000.0)
+    assert decisions["SPY"]["exposure"] == 1.0  # force-invested on cold start
+
+
+@patch("schroeder_trader.basket.orchestrator._compute_signal_for_ticker")
+def test_compute_decisions_cold_start_force_invests_sell_signal(
+    mock_sig, tmp_path,
+):
+    """User-chosen strict cold-start: even SELL signals get exposure=1.0.
+
+    This overrides bearish model output during the bootstrap day. Documented
+    in the orchestrator with a logger.warning."""
+    mock_sig.return_value = _fake_signal_pipeline("SELL", "FLAT", regime="BEAR")
+    store = _make_store(tmp_path)
+    weights = {"SPY": 1.0}
+    now = datetime(2026, 5, 21, 20, 30, tzinfo=timezone.utc)
+
+    decisions = compute_decisions(store, weights, pd.DataFrame(), now, portfolio_value=100000.0)
+    assert decisions["SPY"]["exposure"] == 1.0  # force-invested on cold start even with SELL
+
+
+@patch("schroeder_trader.basket.orchestrator._compute_signal_for_ticker")
+def test_compute_decisions_warm_start_after_first_basket_row_uses_prior_exposure(
+    mock_sig, tmp_path,
+):
+    """Once a prior basket row exists, cold-start force-invest no longer applies."""
+    # Seed a prior basket row (any signal, doesn't matter for cold-start detection)
+    pf = pd.DataFrame({
+        "id": [1], "timestamp": ["2026-05-20T20:30:00+00:00"],
+        "pipeline": ["basket"], "ticker": ["SPY"],
+        "cash": [500.0], "position_qty": [64],
+        "position_value": [47000.0], "total_value": [105000.0],
+    })
+    pf.to_csv(tmp_path / "portfolio.csv", index=False)
+    pd.DataFrame(columns=[
+        "id", "timestamp", "pipeline", "ticker", "close_price",
+        "predicted_class", "predicted_proba", "ml_signal", "sma_signal",
+        "regime", "signal_source", "bear_day_count",
+        "kelly_fraction", "kelly_qty", "high_water_mark",
+        "trailing_stop_triggered",
+    ]).to_csv(tmp_path / "shadow_signals.csv", index=False)
+    store = CsvStore(tmp_path)
+
+    # HOLD signal with no prior shadow row → prior_exposure=0 → exposure=0
+    # (NOT force-invested because basket already has a portfolio row)
+    mock_sig.return_value = _fake_signal_pipeline("HOLD", "SMA")
+    now = datetime(2026, 5, 21, 20, 30, tzinfo=timezone.utc)
+    decisions = compute_decisions(store, {"SPY": 1.0}, pd.DataFrame(), now, portfolio_value=105000.0)
+    assert decisions["SPY"]["exposure"] == 0.0  # warm start, prior_exposure rules

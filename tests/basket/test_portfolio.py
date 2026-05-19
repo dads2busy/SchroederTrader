@@ -7,6 +7,7 @@ import pytest
 from schroeder_trader.basket.portfolio import (
     SimulatedBroker,
     bootstrap_starting_value,
+    is_basket_cold_start,
     load_basket_broker,
     read_position_qty,
     prior_exposure,
@@ -212,6 +213,41 @@ def test_load_basket_broker_cold_start_uses_spy_only_total(tmp_path):
     assert broker.cash == 101965.4
     assert broker.get_position("SPY") == 0
     assert broker.get_position("XLK") == 0
+
+
+def test_is_basket_cold_start_true_when_no_basket_rows(tmp_path):
+    pd.DataFrame({
+        "id": [1], "timestamp": ["2026-05-19T20:30:00+00:00"],
+        "pipeline": ["spy_only"], "ticker": ["SPY"],
+        "cash": [1965.4], "position_qty": [141],
+        "position_value": [100000.0], "total_value": [101965.4],
+    }).to_csv(tmp_path / "portfolio.csv", index=False)
+    store = _make_store(tmp_path)
+    assert is_basket_cold_start(store) is True
+
+
+def test_is_basket_cold_start_false_when_basket_rows_exist(tmp_path):
+    pd.DataFrame({
+        "id": [1, 2],
+        "timestamp": ["2026-05-19T20:30:00+00:00"] * 2,
+        "pipeline": ["spy_only", "basket"],
+        "ticker": ["SPY", "SPY"],
+        "cash": [1965.4, 500.0],
+        "position_qty": [141, 64],
+        "position_value": [100000.0, 47000.0],
+        "total_value": [101965.4, 105000.0],
+    }).to_csv(tmp_path / "portfolio.csv", index=False)
+    store = _make_store(tmp_path)
+    assert is_basket_cold_start(store) is False
+
+
+def test_is_basket_cold_start_true_when_portfolio_csv_empty(tmp_path):
+    pd.DataFrame(columns=[
+        "id", "timestamp", "pipeline", "ticker",
+        "cash", "position_qty", "position_value", "total_value",
+    ]).to_csv(tmp_path / "portfolio.csv", index=False)
+    store = _make_store(tmp_path)
+    assert is_basket_cold_start(store) is True
 
 
 def test_load_basket_broker_warm_start_uses_latest_basket_rows(tmp_path):

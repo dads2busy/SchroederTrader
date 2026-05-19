@@ -9,8 +9,11 @@ logged to shadow_signals.csv with pipeline='basket'.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import pandas as pd
@@ -37,6 +40,7 @@ from schroeder_trader.strategy.sma_crossover import generate_signal
 from schroeder_trader.strategy.xgboost_classifier import load_model
 
 from schroeder_trader.basket.portfolio import (
+    is_basket_cold_start,
     prior_exposure,
     read_trading_dates,
 )
@@ -126,6 +130,13 @@ def compute_decisions(
     Side effect: writes one row per ticker to shadow_signals.csv with
     pipeline='basket' capturing the decision (including HWM and stop state).
     """
+    cold_start = is_basket_cold_start(store)
+    if cold_start:
+        logger.info(
+            "Basket cold start detected — force-investing to target weights "
+            "regardless of per-ticker signal"
+        )
+
     decisions: dict[str, dict] = {}
     for ticker in weights:
         # Resolve model path: SPY uses the production model, others use SHADOW_TICKERS
@@ -142,6 +153,17 @@ def compute_decisions(
 
         if ts_triggered or in_cooldown:
             exposure = 0.0
+        elif cold_start:
+            # Force-invest on cold start: bootstrap to target weights regardless
+            # of per-ticker signal (per user-chosen semantics). Subsequent runs
+            # use the standard HOLD-carries-prior logic below.
+            exposure = 1.0
+            if signal == Signal.SELL:
+                logger.warning(
+                    "Basket cold start: overriding SELL signal for %s to BUY-to-target. "
+                    "If model is bearish on this ticker, consider revisiting cold-start policy.",
+                    ticker,
+                )
         elif signal == Signal.BUY:
             exposure = 1.0
         elif signal == Signal.SELL:

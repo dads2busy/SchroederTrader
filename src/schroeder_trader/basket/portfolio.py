@@ -139,6 +139,19 @@ def prior_exposure(store: CsvStore, ticker: str) -> float:
     return 0.0
 
 
+def is_basket_cold_start(store: CsvStore) -> bool:
+    """Return True iff there are no pipeline='basket' rows in portfolio.csv.
+
+    Used by the orchestrator to detect the basket's first-ever run and
+    force-invest to target weights regardless of signal. Once any basket
+    row exists, the standard HOLD-carries-prior semantics take over.
+    """
+    df = store.read("portfolio")
+    if df.empty:
+        return True
+    return bool((df["pipeline"] == "basket").sum() == 0)
+
+
 def read_trading_dates(store: CsvStore, ticker: str) -> list[date]:
     """ET-local dates for which a basket-pipeline shadow signal exists for
     `ticker`, in ascending order. Used by the per-ticker TrailingStop's

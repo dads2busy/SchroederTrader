@@ -83,19 +83,22 @@ def test_basket_with_spy_only_weight_matches_spy_only_pipeline(
 
     pf = pd.read_csv(tmp_path / "portfolio.csv")
     basket_rows = pf[pf["pipeline"] == "basket"]
+    # Filter to today's new row (timestamp starts with fixture_date); prior
+    # basket seed rows from earlier dates are excluded.
+    today_basket = basket_rows[basket_rows["timestamp"].str.startswith(fixture_date)]
 
-    assert len(basket_rows) == 1, \
-        f"Expected 1 basket row, got {len(basket_rows)}"
-    assert basket_rows.iloc[0]["ticker"] == "SPY"
+    assert len(today_basket) == 1, \
+        f"Expected 1 new basket row for {fixture_date}, got {len(today_basket)}"
+    assert today_basket.iloc[0]["ticker"] == "SPY"
 
-    assert int(basket_rows.iloc[0]["position_qty"]) == expected["expected_position_qty"], (
+    assert int(today_basket.iloc[0]["position_qty"]) == expected["expected_position_qty"], (
         f"Position mismatch on {fixture_date}: "
-        f"basket got {basket_rows.iloc[0]['position_qty']}, "
+        f"basket got {today_basket.iloc[0]['position_qty']}, "
         f"SPY-only had {expected['expected_position_qty']}"
     )
 
-    assert abs(float(basket_rows.iloc[0]["total_value"]) - expected["expected_total_value"]) < 1.0, (
+    assert abs(float(today_basket.iloc[0]["total_value"]) - expected["expected_total_value"]) < 1.0, (
         f"Total value mismatch on {fixture_date}: "
-        f"basket got {basket_rows.iloc[0]['total_value']}, "
+        f"basket got {today_basket.iloc[0]['total_value']}, "
         f"SPY-only had {expected['expected_total_value']}"
     )
