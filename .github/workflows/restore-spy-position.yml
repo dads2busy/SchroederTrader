@@ -1,0 +1,51 @@
+name: restore-spy-position
+
+# ONE-OFF cleanup workflow for the 2026-05-19 incident: the basket
+# pipeline (pre-SimulatedBroker) sold the SPY-only pipeline's 141 SPY
+# position. This workflow fires four times between 13:40 and 13:55 UTC
+# on 2026-05-20 (May 20 of any year, but the script's TARGET_DATE check
+# prevents accidental future-year BUYs).
+#
+# The window starts ~10 minutes after the 13:30 UTC market open so the
+# pending XLK/XLV/XLE SELL orders from 2026-05-19 have time to fill and
+# release buying power. Each tick attempts the BUY; the script exits
+# cleanly on success or rejection so the cron continues to retry.
+#
+# Safe to leave in the repo after 2026-05-20 — the script's date check
+# turns it into a no-op forever after. Delete the file once you're sure
+# you don't need a reference.
+
+on:
+  schedule:
+    - cron: '40,45,50,55 13 20 5 *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Restore SPY position
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_BASE_URL: ${{ secrets.ALPACA_BASE_URL }}
+        run: uv run python scripts/restore_spy_position.py
