@@ -11,6 +11,8 @@ from schroeder_trader.reports.daily_email import (
     build_oracles_section,
     build_email_body,
     build_sector_shadow_section,
+    build_comparison_section,
+    _compute_performance,
     _exposure_from_decisions,
     _compute_ticker_shadow_pnl,
     _compute_basket_pnl,
@@ -655,6 +657,66 @@ def test_build_basket_paper_section_renders_xgb_bear_weak_source():
     assert len(lines) >= 3
     lengths = set(len(ln.rstrip()) for ln in lines)
     assert len(lengths) == 1, f"Lines have inconsistent widths: {lengths}"
+
+
+def test_compute_performance_system_ignores_basket_rows(tmp_path):
+    """System (real) must use only spy_only rows, not the larger basket rows."""
+    pd.DataFrame({
+        "timestamp": [
+            "2026-04-15T20:30:00+00:00", "2026-05-18T20:30:00+00:00",  # spy_only
+            "2026-06-02T22:11:00+00:00",                                # basket (larger)
+        ],
+        "pipeline": ["spy_only", "spy_only", "basket"],
+        "ticker": ["SPY", "SPY", "XLE"],
+        "total_value": [100000.0, 106000.0, 999999.0],  # basket value is a decoy
+    }).to_csv(tmp_path / "portfolio.csv", index=False)
+    pd.DataFrame(columns=["timestamp", "provider", "target_exposure", "error"]).to_csv(
+        tmp_path / "llm_shadow_signals.csv", index=False
+    )
+    idx = pd.bdate_range("2026-04-15", "2026-05-18")
+    spy = pd.DataFrame({"close": [700.0 + i for i in range(len(idx))]}, index=idx)
+
+    perf = _compute_performance(data_root=tmp_path, spy_history=spy, start_date=date(2026, 4, 15))
+    # 106000/100000 - 1 = +6.00%, NOT contaminated by the 999999 basket row
+    assert perf["system_real"] == 106000.0
+    assert round(perf["system_real_return_pct"], 2) == 6.00
+
+
+def test_build_comparison_section_four_way_table(tmp_path):
+    """Unified scorecard renders all four + SPY, sorted, since basket launch."""
+    pd.DataFrame({
+        "timestamp": [
+            "2026-05-18T20:30:00+00:00",                                # spy_only baseline
+            "2026-05-19T20:38:00+00:00", "2026-06-02T22:11:00+00:00",   # basket inception->latest
+        ],
+        "pipeline": ["spy_only", "basket", "basket"],
+        "ticker": ["SPY", "SPY", "SPY"],
+        "total_value": [100000.0, 100000.0, 105000.0],  # basket +5%
+    }).to_csv(tmp_path / "portfolio.csv", index=False)
+    # Claude fully invested (= SPY), OpenAI half-invested
+    pd.DataFrame({
+        "timestamp": ["2026-05-19T20:30:00+00:00"] * 2,
+        "provider": ["claude", "openai"],
+        "target_exposure": [1.0, 0.5],
+        "error": [None, None],
+    }).to_csv(tmp_path / "llm_shadow_signals.csv", index=False)
+    # SPY +3% over the window
+    idx = pd.to_datetime(["2026-05-19", "2026-05-20", "2026-06-02"])
+    spy = pd.DataFrame({"close": [600.0, 600.0, 618.0]}, index=idx)
+
+    section = build_comparison_section(
+        data_root=tmp_path, spy_history=spy,
+        basket_launch_date=date(2026, 5, 19),
+        system_current_value=104000.0,  # 104000/100000 = +4%
+    )
+    assert "SCORECARD" in section
+    for label in ("Basket", "System (real)", "Claude (sim)", "OpenAI (sim)", "SPY B&H"):
+        assert label in section
+    assert "Per $100k" in section and "vs SPY" in section
+    assert "+5.00%" in section   # basket
+    assert "+4.00%" in section   # system from live value vs pre-launch baseline
+    # Sorted by return desc: Basket(+5) before System(+4) before SPY(+3)
+    assert section.index("Basket") < section.index("System (real)") < section.index("SPY B&H")
 
 
 def test_build_basket_paper_section_shows_return_and_vs_spy():

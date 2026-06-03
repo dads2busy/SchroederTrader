@@ -150,10 +150,14 @@ def _compute_performance(
     out["sessions"] = len(spy_window)
     out["spy_return_pct"] = (spy_window["close"].iloc[-1] / spy_window["close"].iloc[0] - 1) * 100
 
-    # System real: from portfolio.csv
+    # System real: from portfolio.csv. Filter to spy_only — portfolio.csv now
+    # also holds basket-pipeline rows, and without this the latest basket row
+    # (a different, larger portfolio) contaminates System's start/end value.
     pf_path = data_root / "portfolio.csv"
     if pf_path.exists():
         pf = pd.read_csv(pf_path)
+        if "pipeline" in pf.columns:
+            pf = pf[pf["pipeline"] == "spy_only"]
         if not pf.empty:
             pf["date"] = pd.to_datetime(pf["timestamp"], utc=True, format="ISO8601").dt.tz_convert("America/New_York").dt.date
             pf_window = pf[pf["date"] >= start_date].sort_values("date")
@@ -476,6 +480,96 @@ def build_performance_section(
     return _section(f"PERFORMANCE — Live trading since {start_date}", lines)
 
 
+def build_comparison_section(
+    *,
+    data_root: Path,
+    spy_history: pd.DataFrame,
+    basket_launch_date: date,
+    system_current_value: float,
+) -> str:
+    """Unified scorecard: System / Basket / Claude / OpenAI vs SPY over the
+    SAME window (since basket launch), rebased to a common $100k start.
+
+    This is the apples-to-apples headline; the detailed PERFORMANCE (since
+    live-trading start) and BASKET PAPER sections below give per-strategy
+    breakdowns over their own windows.
+
+    Method matches the existing sections: System/Basket/SPY are point-to-point
+    real values; Claude/OpenAI are close-to-close simulations. System's launch
+    baseline is its last spy_only value before the basket launched (which is
+    exactly what the basket was seeded from), and its current value is the live
+    portfolio value — so it doesn't depend on intermediate spy_only history.
+
+    Returns '' if there isn't enough data for a meaningful comparison.
+    """
+    pf_path = data_root / "portfolio.csv"
+    if not pf_path.exists():
+        return ""
+    pf = pd.read_csv(pf_path)
+    if pf.empty or "pipeline" not in pf.columns:
+        return ""
+    pf["date"] = pd.to_datetime(pf["timestamp"], utc=True, format="ISO8601").dt.tz_convert("America/New_York").dt.date
+
+    basket = pf[pf["pipeline"] == "basket"].sort_values("timestamp")
+    if basket.empty:
+        return ""
+    basket_inception = float(basket.iloc[0]["total_value"])
+    basket_latest = float(basket.iloc[-1]["total_value"])
+    basket_ret = (basket_latest / basket_inception - 1) * 100 if basket_inception > 0 else None
+
+    # System: baseline = last spy_only value strictly before launch; current = live value.
+    spy_only_pre = pf[(pf["pipeline"] == "spy_only") & (pf["date"] < basket_launch_date)].sort_values("date")
+    system_ret = None
+    if not spy_only_pre.empty:
+        system_baseline = float(spy_only_pre.iloc[-1]["total_value"])
+        if system_baseline > 0:
+            system_ret = (system_current_value / system_baseline - 1) * 100
+
+    # Claude/OpenAI sim + SPY over the same window.
+    perf = _compute_performance(
+        data_root=data_root, spy_history=spy_history, start_date=basket_launch_date
+    )
+    spy_ret = perf["spy_return_pct"]
+    claude_ret = perf["claude_sim_return_pct"]
+    openai_ret = perf["openai_sim_return_pct"]
+
+    if basket_ret is None and spy_ret is None:
+        return ""
+
+    rows = [
+        ("Basket", basket_ret),
+        ("System (real)", system_ret),
+        ("Claude (sim)", claude_ret),
+        ("OpenAI (sim)", openai_ret),
+        ("SPY B&H", spy_ret),
+    ]
+    rows.sort(key=lambda r: (r[1] is None, -(r[1] if r[1] is not None else 0.0)))
+
+    sessions = perf.get("sessions") or 0
+    lines = [
+        f"Same window for all — since basket launch {basket_launch_date}  ({sessions} sessions)",
+        "",
+        f"  {'Strategy':<14} {'Return':>8}  {'Per $100k':>10}  {'vs SPY':>9}",
+        f"  {'-'*14} {'-'*8}  {'-'*10}  {'-'*9}",
+    ]
+    for label, pct in rows:
+        if pct is None:
+            lines.append(f"  {label:<14} {'N/A':>8}  {'N/A':>10}  {'N/A':>9}")
+            continue
+        per100k = 100_000 * (1 + pct / 100)
+        if label == "SPY B&H":
+            vs = "—"
+        else:
+            vs = f"{pct - spy_ret:+.2f} pp" if spy_ret is not None else "N/A"
+        lines.append(
+            f"  {label:<14} {_fmt_pct(pct):>8}  {_fmt_dollars(per100k):>10}  {vs:>9}"
+        )
+    lines.append("")
+    lines.append("  Rebased to a common $100k start. System (real) = actual Alpaca")
+    lines.append("  P&L; Basket/Claude/OpenAI are close-to-close simulations.")
+    return _section(f"SCORECARD — apples-to-apples since {basket_launch_date}", lines)
+
+
 def _basket_return_vs_spy(
     basket_pf: pd.DataFrame,
     latest_total_value: float,
@@ -648,6 +742,20 @@ def build_email_body(
             cash=cash,
             position_qty=position_qty,
         ),
+    ]
+
+    # Unified scorecard right after TODAY (needs the basket launch date).
+    if basket_state is not None:
+        scorecard = build_comparison_section(
+            data_root=data_root,
+            spy_history=spy_history,
+            basket_launch_date=basket_state["launch_date"],
+            system_current_value=portfolio_value,
+        )
+        if scorecard:
+            sections.append(scorecard)
+
+    sections.extend([
         build_system_section(
             sma_signal=sma_signal,
             sma_50=sma_50,
@@ -666,7 +774,7 @@ def build_email_body(
             spy_history=spy_history,
             start_date=live_start_date,
         ),
-    ]
+    ])
 
     if basket_state is not None:
         basket_section = build_basket_paper_section(
