@@ -517,17 +517,22 @@ def build_comparison_section(
     basket_latest = float(basket.iloc[-1]["total_value"])
     basket_ret = (basket_latest / basket_inception - 1) * 100 if basket_inception > 0 else None
 
-    # System: baseline = last spy_only value strictly before launch; current = live value.
+    # Anchor everyone at the close BEFORE the basket launched. The basket was
+    # seeded from System's portfolio value that day, so this is the one baseline
+    # all four share (System and Basket literally start from the same dollars).
     spy_only_pre = pf[(pf["pipeline"] == "spy_only") & (pf["date"] < basket_launch_date)].sort_values("date")
+    anchor_date = spy_only_pre.iloc[-1]["date"] if not spy_only_pre.empty else basket_launch_date
+
+    # System: baseline = value at the anchor; current = live portfolio value.
     system_ret = None
     if not spy_only_pre.empty:
         system_baseline = float(spy_only_pre.iloc[-1]["total_value"])
         if system_baseline > 0:
             system_ret = (system_current_value / system_baseline - 1) * 100
 
-    # Claude/OpenAI sim + SPY over the same window.
+    # Claude/OpenAI sim + SPY anchored at the same date, so all returns compare.
     perf = _compute_performance(
-        data_root=data_root, spy_history=spy_history, start_date=basket_launch_date
+        data_root=data_root, spy_history=spy_history, start_date=anchor_date
     )
     spy_ret = perf["spy_return_pct"]
     claude_ret = perf["claude_sim_return_pct"]
@@ -565,8 +570,9 @@ def build_comparison_section(
             f"  {label:<14} {_fmt_pct(pct):>8}  {_fmt_dollars(per100k):>10}  {vs:>9}"
         )
     lines.append("")
-    lines.append("  Rebased to a common $100k start. System (real) = actual Alpaca")
-    lines.append("  P&L; Basket/Claude/OpenAI are close-to-close simulations.")
+    lines.append(f"  All anchored at the {anchor_date} close (the basket's seed baseline)")
+    lines.append("  and rebased to a common $100k. System (real) = actual Alpaca P&L;")
+    lines.append("  Basket/Claude/OpenAI are close-to-close simulations.")
     return _section(f"SCORECARD — apples-to-apples since {basket_launch_date}", lines)
 
 
