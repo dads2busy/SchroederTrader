@@ -476,17 +476,56 @@ def build_performance_section(
     return _section(f"PERFORMANCE — Live trading since {start_date}", lines)
 
 
+def _basket_return_vs_spy(
+    basket_pf: pd.DataFrame,
+    latest_total_value: float,
+    launch_date: date,
+    spy_history: pd.DataFrame | None,
+) -> tuple[float | None, float | None]:
+    """Return (basket_return_pct, spy_bnh_return_pct) since launch.
+
+    basket_return_pct is the change from the earliest basket snapshot's
+    total_value to the latest — None if there's only one snapshot (nothing to
+    compare). spy_bnh_return_pct mirrors the PERFORMANCE section: SPY close at
+    launch through the latest close — None if spy_history can't cover it.
+    """
+    basket_return_pct = None
+    if basket_pf["timestamp"].nunique() >= 2:
+        inception_value = float(
+            basket_pf.sort_values("timestamp").iloc[0]["total_value"]
+        )
+        if inception_value > 0:
+            basket_return_pct = (latest_total_value / inception_value - 1) * 100
+
+    spy_return_pct = None
+    if spy_history is not None and not spy_history.empty:
+        sh = spy_history.copy()
+        if not isinstance(sh.index, pd.DatetimeIndex):
+            sh.index = pd.to_datetime(sh.index)
+        if sh.index.tz is not None:
+            sh.index = sh.index.tz_localize(None)
+        win = sh[sh.index.date >= launch_date]
+        if len(win) >= 2:
+            spy_return_pct = (win["close"].iloc[-1] / win["close"].iloc[0] - 1) * 100
+
+    return basket_return_pct, spy_return_pct
+
+
 def build_basket_paper_section(
     *,
     portfolio_df: pd.DataFrame,
     shadow_signals_df: pd.DataFrame,
     basket_weights: dict,
     launch_date: date,
+    spy_history: pd.DataFrame | None = None,
 ) -> str:
     """Render the BASKET PAPER section for the daily email.
 
     Reads the latest basket-pipeline snapshot from portfolio_df + shadow_signals_df
-    and renders a per-ticker table plus any fired-stop warning notes.
+    and renders a per-ticker table plus any fired-stop warning notes. When
+    spy_history is supplied and there are >=2 snapshots, a since-launch Return
+    line and a vs-SPY-B&H edge line are shown so the basket reads apples-to-
+    apples with the PERFORMANCE section's "System (real)" row.
     Returns empty string if there are no basket rows.
     """
     basket_pf = portfolio_df[portfolio_df["pipeline"] == "basket"].copy() if not portfolio_df.empty else portfolio_df
@@ -509,14 +548,30 @@ def build_basket_paper_section(
             for _, r in ss_latest.iterrows():
                 ss_by_ticker[r["ticker"]] = r
 
+    basket_return_pct, spy_return_pct = _basket_return_vs_spy(
+        basket_pf, total_value, launch_date, spy_history
+    )
+
     lines = [
         f"  Total value:  {_fmt_dollars(total_value)}",
         f"  Cash sleeve:  {_fmt_dollars(cash)} ({cash_pct:.1f}%)",
+    ]
+    if basket_return_pct is not None:
+        lines.append(
+            f"  Return:       {_fmt_pct(basket_return_pct)}  (since {launch_date})"
+        )
+        if spy_return_pct is not None:
+            edge_pp = basket_return_pct - spy_return_pct
+            lines.append(
+                f"  vs SPY B&H:   {edge_pp:+.2f} pp  "
+                f"(SPY {_fmt_pct(spy_return_pct)} same window)"
+            )
+    lines.extend([
         "",
         f"  {'Ticker':<7} {'Target':>7} {'Actual':>7} {'Position':>9}  "
         f"{'Value':>10}  {'Signal':<21} {'Stop':>5}",
         f"  {'-'*7} {'-'*7} {'-'*7} {'-'*9}  {'-'*10}  {'-'*21} {'-'*5}",
-    ]
+    ])
     warnings: list[str] = []
     for ticker in basket_weights:
         rows_for_ticker = latest_rows[latest_rows["ticker"] == ticker]
@@ -619,6 +674,7 @@ def build_email_body(
             shadow_signals_df=basket_state["shadow_signals_df"],
             basket_weights=basket_state["basket_weights"],
             launch_date=basket_state["launch_date"],
+            spy_history=spy_history,
         )
         if basket_section:
             sections.append(basket_section)

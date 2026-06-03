@@ -657,6 +657,74 @@ def test_build_basket_paper_section_renders_xgb_bear_weak_source():
     assert len(lengths) == 1, f"Lines have inconsistent widths: {lengths}"
 
 
+def test_build_basket_paper_section_shows_return_and_vs_spy():
+    """With >=2 snapshots and spy_history, render Return-since-launch and vs-SPY."""
+    from schroeder_trader.reports.daily_email import build_basket_paper_section
+    from datetime import date
+
+    # Inception 100k (5/19) -> latest 105k (6/02) = +5.00%
+    portfolio_df = pd.DataFrame({
+        "timestamp": ["2026-05-19T20:38:00+00:00", "2026-06-02T22:11:00+00:00"],
+        "pipeline": ["basket", "basket"],
+        "ticker": ["SPY", "SPY"],
+        "cash": [100.0, 100.0],
+        "position_qty": [160, 168],
+        "position_value": [99900.0, 104900.0],
+        "total_value": [100000.0, 105000.0],
+    })
+    shadow_signals_df = pd.DataFrame({
+        "timestamp": ["2026-06-02T22:11:00+00:00"],
+        "pipeline": ["basket"], "ticker": ["SPY"],
+        "ml_signal": ["HOLD"], "signal_source": ["SMA"],
+        "trailing_stop_triggered": [0], "high_water_mark": [104900.0],
+    })
+    # SPY B&H over same window: 600 -> 606 = +1.00%; basket edge = +4.00 pp
+    spy = pd.DataFrame(
+        {"close": [600.0, 606.0]},
+        index=pd.to_datetime(["2026-05-19", "2026-06-02"]),
+    )
+    section = build_basket_paper_section(
+        portfolio_df=portfolio_df,
+        shadow_signals_df=shadow_signals_df,
+        basket_weights={"SPY": 1.0},
+        launch_date=date(2026, 5, 19),
+        spy_history=spy,
+    )
+    assert "Return:" in section
+    assert "+5.00%" in section
+    assert "vs SPY B&H" in section
+    assert "+4.00 pp" in section
+
+
+def test_build_basket_paper_section_omits_return_with_single_snapshot():
+    """A single basket snapshot has no since-launch return, so omit the line."""
+    from schroeder_trader.reports.daily_email import build_basket_paper_section
+    from datetime import date
+
+    portfolio_df = pd.DataFrame({
+        "timestamp": ["2026-05-19T20:38:00+00:00"],
+        "pipeline": ["basket"], "ticker": ["SPY"],
+        "cash": [100.0], "position_qty": [160],
+        "position_value": [99900.0], "total_value": [100000.0],
+    })
+    shadow_signals_df = pd.DataFrame({
+        "timestamp": ["2026-05-19T20:38:00+00:00"],
+        "pipeline": ["basket"], "ticker": ["SPY"],
+        "ml_signal": ["HOLD"], "signal_source": ["SMA"],
+        "trailing_stop_triggered": [0], "high_water_mark": [99900.0],
+    })
+    spy = pd.DataFrame({"close": [600.0]}, index=pd.to_datetime(["2026-05-19"]))
+    section = build_basket_paper_section(
+        portfolio_df=portfolio_df,
+        shadow_signals_df=shadow_signals_df,
+        basket_weights={"SPY": 1.0},
+        launch_date=date(2026, 5, 19),
+        spy_history=spy,
+    )
+    assert "Return:" not in section
+    assert "Total value:" in section
+
+
 def test_build_email_body_omits_basket_section_when_basket_state_is_none(tmp_path):
     from datetime import date
     dates = pd.bdate_range("2026-04-15", periods=10).tz_localize(None)
