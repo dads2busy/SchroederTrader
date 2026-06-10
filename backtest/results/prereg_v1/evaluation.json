@@ -1,0 +1,79 @@
+{
+  "window": [
+    "1993-11-11",
+    "2026-06-10"
+  ],
+  "canaries": {
+    "A_lag0_vs_lag1": [
+      25.97,
+      10.15
+    ],
+    "B_random_median_vs_bh": [
+      -2.34,
+      10.79
+    ]
+  },
+  "results": {
+    "S0_buy_hold": {
+      "terminal_multiple": 28.05,
+      "cagr_pct": 10.79,
+      "sharpe": 0.64,
+      "max_dd_pct": -55.19,
+      "longest_underwater_days": 1656,
+      "worst_12m_pct": -47.35,
+      "trades": 1,
+      "time_above_1x_pct": 0.0
+    },
+    "S1_faber_null": {
+      "terminal_multiple": 14.87,
+      "cagr_pct": 8.65,
+      "sharpe": 0.74,
+      "max_dd_pct": -24.65,
+      "longest_underwater_days": 1136,
+      "worst_12m_pct": -17.16,
+      "trades": 215,
+      "time_above_1x_pct": 0.0
+    },
+    "S2_trend_hard": {
+      "terminal_multiple": 23.24,
+      "cagr_pct": 10.15,
+      "sharpe": 0.69,
+      "max_dd_pct": -34.24,
+      "longest_underwater_days": 1897,
+      "worst_12m_pct": -22.55,
+      "trades": 215,
+      "time_above_1x_pct": 77.1
+    },
+    "S3_trend_soft": {
+      "terminal_multiple": 37.86,
+      "cagr_pct": 11.82,
+      "sharpe": 0.7,
+      "max_dd_pct": -46.3,
+      "longest_underwater_days": 1690,
+      "worst_12m_pct": -36.52,
+      "trades": 215,
+      "time_above_1x_pct": 77.1
+    },
+    "S4_vol_target": {
+      "terminal_multiple": 24.74,
+      "cagr_pct": 10.36,
+      "sharpe": 0.74,
+      "max_dd_pct": -45.33,
+      "longest_underwater_days": 1559,
+      "worst_12m_pct": -32.25,
+      "trades": 626,
+      "time_above_1x_pct": 57.2
+    },
+    "S5_combo": {
+      "terminal_multiple": 15.62,
+      "cagr_pct": 8.81,
+      "sharpe": 0.74,
+      "max_dd_pct": -22.88,
+      "longest_underwater_days": 1130,
+      "worst_12m_pct": -15.73,
+      "trades": 639,
+      "time_above_1x_pct": 53.9
+    }
+  },
+  "passers": []
+}
