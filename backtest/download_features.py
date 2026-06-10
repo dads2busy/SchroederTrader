@@ -63,6 +63,39 @@ def compute_derived_features(combined: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def download_dtb3(force: bool = False) -> Path:
+    """Download the FRED DTB3 series (3-month T-bill rate, percent) to its own
+    cached CSV. Kept separate from features_daily.csv so fetching it never
+    perturbs the production feature file. Used by the pre-registered
+    levered-brake evaluation (financing cost + cash yield)."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    output = DATA_DIR / "dtb3.csv"
+    if not force and output.exists():
+        age_hours = (time.time() - output.stat().st_mtime) / 3600
+        if age_hours < 24 * 7:
+            print(f"Using cached DTB3 ({age_hours/24:.1f}d old). Use --force to re-download.")
+            return output
+    try:
+        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTB3"
+        df = pd.read_csv(url, parse_dates=["observation_date"], na_values=".")
+        df = df.rename(columns={"observation_date": "date", "DTB3": "dtb3"}).set_index("date")
+        print("DTB3 source: FRED")
+    except Exception as exc:
+        # PREREGISTRATION_levered_brake_v1 AMENDMENT 1: FRED unreachable from this
+        # environment (HTTP 504); ^IRX is the same instrument (13-week T-bill
+        # yield, percent) under a discount-rate quote convention (differs by bps).
+        print(f"FRED failed ({exc}); falling back to yfinance ^IRX")
+        data = yf.download("^IRX", start="1993-01-01", auto_adjust=True, progress=False)
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+        df = data[["Close"]].rename(columns={"Close": "dtb3"})
+        df.index.name = "date"
+        print("DTB3 source: yfinance ^IRX (fallback)")
+    df.to_csv(output)
+    print(f"Saved {len(df)} DTB3 rows to {output}")
+    return output
+
+
 def download_all(start: str = "1993-01-01", end: str | None = None, force: bool = False) -> Path:
     """Download all external feature data and save to CSV."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -93,5 +126,9 @@ def download_all(start: str = "1993-01-01", end: str | None = None, force: bool 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download external feature data")
     parser.add_argument("--force", action="store_true", help="Force re-download even if cache exists")
+    parser.add_argument("--dtb3-only", action="store_true", help="Fetch only the FRED DTB3 series")
     args = parser.parse_args()
-    download_all(force=args.force)
+    if args.dtb3_only:
+        download_dtb3(force=args.force)
+    else:
+        download_all(force=args.force)

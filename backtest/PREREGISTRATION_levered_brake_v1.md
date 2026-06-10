@@ -104,3 +104,27 @@ noise, and pretending otherwise invites goalpost-moving in both directions.
 
 If these probabilities turn out poorly calibrated, that is itself information about
 how much weight future recommendations from this assistant should carry.
+
+---
+
+## AMENDMENT 1 (2026-06-10, pre-results)
+
+**Class:** data-source substitution, made before any evaluation results existed.
+**What:** FRED's DTB3 endpoint is unreachable from this environment (HTTP 504 on
+both CSV endpoints). The rate series is sourced from yfinance `^IRX` instead — the
+same instrument (13-week T-bill yield, percent) under a discount-rate quote
+convention, differing from DTB3 by a few basis points. `download_features.py`
+tries FRED first and falls back to `^IRX`, so the named source self-heals.
+**Performance motivation:** none possible — no candidate had been evaluated.
+
+## AMENDMENT 2 (2026-06-10, pre-results; flagged by independent spec review)
+
+1. **S1 is exempt from gate 3.** Gate 3's rationale is "anything levered/complex must
+   beat the dumbest public rule"; S1 *is* that rule and cannot beat itself. Under the
+   literal text S1 could never win even if it alone beat B&H within the DD gate, which
+   would fire the kill criterion in a scenario that is actually a pass ("the dumb rule
+   is the answer"). Disclosure: prior honest results (lag-1 sector backtest) showed a
+   1x SMA-gated strategy far below B&H CAGR, so this exemption is unlikely to bind —
+   noted so the amendment cannot be read as quietly helping a favored candidate.
+2. **SPY price data refreshed through the present before the run** (cache ended
+   2026-03-18). Decided before any candidate was evaluated.
