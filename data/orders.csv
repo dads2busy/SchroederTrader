@@ -233,3 +233,4 @@ id,signal_id,pipeline,alpaca_order_id,timestamp,ticker,action,quantity,fill_pric
 232,0,basket,sim-XLV--2,2026-10-31T00:51:21.519253+00:00,XLV,SELL,2,,,FILLED,184.9,
 233,0,basket,sim-XLE--7,2026-10-31T00:51:21.519253+00:00,XLE,SELL,7,,,FILLED,70.0,
 234,0,basket,sim-XLE-5,2026-11-03T02:56:29.897508+00:00,XLE,BUY,5,,,FILLED,67.26,
+235,0,basket,sim-XLE-1,2026-11-04T01:26:47.811342+00:00,XLE,BUY,1,,,FILLED,66.7,
